@@ -123,6 +123,27 @@ class Settings(BaseSettings):
     # approved the login only works for people with a role on the app anyway.
     SIGNUP_ALLOWED_EMAILS: str = os.getenv("SIGNUP_ALLOWED_EMAILS", "")
 
+    # --- PayHere (payment gateway) ------------------------------------------
+    # Sign up at payhere.lk; the merchant id and secret come from
+    # Settings -> Domains & Credentials, per approved domain. The secret signs
+    # both the outbound checkout hash and the inbound notification, so it is the
+    # only thing standing between us and a forged "payment succeeded" — it must
+    # never reach the browser, and never be logged.
+    PAYHERE_MERCHANT_ID: str = os.getenv("PAYHERE_MERCHANT_ID", "")
+    PAYHERE_MERCHANT_SECRET: str = os.getenv("PAYHERE_MERCHANT_SECRET", "")
+    # Sandbox until a live merchant account is approved. Defaults to sandbox on
+    # purpose: the failure of guessing wrong is charging real cards from a test
+    # deployment, which is worse than test payments from a real one.
+    PAYHERE_SANDBOX: bool = os.getenv("PAYHERE_SANDBOX", "true").lower() == "true"
+    # PayHere settles in LKR, USD, GBP, EUR and AUD. Plans store their own
+    # currency; this is only the fallback for a plan that somehow has none.
+    PAYHERE_DEFAULT_CURRENCY: str = os.getenv("PAYHERE_DEFAULT_CURRENCY", "LKR")
+    # Billing interval sent as PayHere's `recurrence`. "1 Month" matches how the
+    # plan catalog prices things (price_cents is a monthly figure).
+    PAYHERE_RECURRENCE: str = os.getenv("PAYHERE_RECURRENCE", "1 Month")
+    # "Forever" until cancelled, which is what a SaaS subscription means.
+    PAYHERE_DURATION: str = os.getenv("PAYHERE_DURATION", "Forever")
+
     VERIFY_SSL_CERTIFICATES: bool = os.getenv("VERIFY_SSL_CERTIFICATES", "true").lower() == "true"
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     TRIAL_DAYS: int = 7  # 7-day trial period

@@ -64,6 +64,11 @@ export const ROUTE_PERMISSIONS: Record<string, readonly string[]> = {
   // Empty for the same reason as /settings/user: everyone can see what their
   // own workspace has consumed, including the agent who just hit the ceiling.
   '/settings/usage': [],
+  // Unlike /settings/usage, this one is admin-only. Buying a plan needs
+  // manage_organization server-side (POST /billing/checkout enforces it), so
+  // showing the page to an agent who cannot act on it is noise — they get
+  // /settings/usage, which tells them what they actually need: what ran out.
+  '/settings/billing': ORGANIZATION_PERMISSIONS,
   '/settings/user': [],
   '/403': [],
 }

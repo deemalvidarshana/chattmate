@@ -22,6 +22,7 @@ os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
 from fastapi.staticfiles import StaticFiles
 import socketio
 from app.api import chat, organizations, users, ai_setup, knowledge, agent, notification, widget, widget_apps, user_groups, roles, analytics, jira, shopify, workflow, workflow_node, mcp_tool, file_upload, token, lead_capture, people, tickets, account_auth, usage, platform_admin, platform_insights, platform_manage, platform_ai, platform_backup
+from app.api import billing as billing_api
 from app.api import help_center as help_center_api
 from app.api import help_center_images
 from app.api import channels as channels_api
@@ -180,6 +181,16 @@ app.include_router(
     usage.router,
     prefix=f"{settings.API_V1_STR}/usage",
     tags=["usage"]
+)
+
+# Tenant-facing billing. /billing/notify inside this router is deliberately
+# unauthenticated — it is PayHere's server-to-server callback, and it
+# authenticates itself with an md5 signature over the merchant secret rather
+# than with a session.
+app.include_router(
+    billing_api.router,
+    prefix=f"{settings.API_V1_STR}/billing",
+    tags=["billing"]
 )
 
 # Cross-tenant operator console. Guarded by users.is_platform_admin, which no

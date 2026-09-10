@@ -146,6 +146,15 @@ export function useNavItems() {
             show: hasEnterpriseModule && permissionChecks.canViewSubscription(),
           },
           {
+            // The open-source billing page, backed by PayHere. Hidden when the
+            // enterprise module is present so the two subscription pages never
+            // appear side by side offering different answers.
+            to: '/settings/billing',
+            icon: 'subscription',
+            label: 'Billing & plan',
+            show: !hasEnterpriseModule && canAccessPath('/settings/billing'),
+          },
+          {
             to: '/settings/ticketing',
             icon: 'ticketing',
             label: 'Ticketing',

@@ -245,6 +245,15 @@ const baseRoutes = [
     meta: { requiresAuth: true },
   },
   {
+    // Self-serve plan changes through PayHere. Distinct from
+    // /settings/subscription, which is the enterprise module's own billing page
+    // and is absent from this deployment.
+    path: '/settings/billing',
+    name: 'billing-settings',
+    component: () => import('@/views/settings/BillingSettings.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/settings/user',
     name: 'user-settings',
     component: UserSettingsView,

@@ -495,6 +495,77 @@ Renewal is automatic. Expires 2026-11-09.
 
 ---
 
+## Payments (PayHere)
+
+Self-serve plan changes go through **PayHere**. Tenants see them at
+`/settings/billing`; the enterprise module's own `/settings/subscription` page
+is hidden when this one is active, so the two never disagree.
+
+| | |
+|---|---|
+| Checkout (sandbox) | `https://sandbox.payhere.lk/pay/checkout` |
+| Checkout (live) | `https://www.payhere.lk/pay/checkout` |
+| Notify URL to register | `{BACKEND_URL}/api/v1/billing/notify` |
+| Credentials | `PAYHERE_MERCHANT_ID`, `PAYHERE_MERCHANT_SECRET` in `backend/.env` |
+
+```bash
+# in /opt/chattermate/backend/.env  (mode 600)
+PAYHERE_MERCHANT_ID=1221234
+PAYHERE_MERCHANT_SECRET=...          # Settings -> Domains & Credentials
+PAYHERE_SANDBOX=false                # only once the live account is approved
+```
+
+`PAYHERE_SANDBOX` defaults to **true**. That direction is deliberate: guessing
+wrong towards sandbox means test payments on a real deployment, and guessing
+wrong the other way means charging real cards from a test one.
+
+### Why a valid signature is not enough
+
+Two independent checks stand between the internet and a free plan upgrade, and
+both are in `app/api/billing.py`:
+
+1. **`md5sig`** proves PayHere sent the notification. Without it anyone who
+   knows a tenant's order id could POST "status_code=2" and be upgraded.
+2. **The amount** is compared against `payhere_orders.amount_cents`, the price
+   quoted when checkout was signed. This is the check the signature does *not*
+   provide: a genuine PayHere payment of 1.00 against a 149.00 order is signed
+   perfectly correctly, because it really happened.
+
+Verification fails closed, including when no merchant secret is set — with no
+secret every signature is forgeable, so "not configured" must mean "reject",
+never "skip the check".
+
+Rejected notifications are still written to `payhere_payments` with
+`verified='false'` and a reason. A run of those is what an attack looks like;
+silently dropping them would leave nothing to look at.
+
+```sql
+-- forged or mispriced notifications
+SELECT created_at, order_id, amount, currency, rejection_reason
+FROM payhere_payments WHERE verified = 'false' ORDER BY created_at DESC;
+
+-- who is subscribed right now
+SELECT o.name, p.plan_code, p.amount_cents, p.currency, p.next_billing_date
+FROM payhere_orders p JOIN organizations o ON o.id = p.organization_id
+WHERE p.status = 'active';
+```
+
+### Chargebacks do not downgrade
+
+`status_code = -3` marks the order `chargedback` and logs an error, but leaves
+the plan in place. A disputed charge can be resolved in the customer's favour,
+and cutting off service automatically would punish someone who may be in the
+right. Downgrading is a human decision, taken in the operator console.
+
+### Testing without real money
+
+Sandbox cards are in PayHere's docs. The notification is server-to-server, so
+`notify_url` has to be reachable from the internet — on a laptop that means a
+tunnel, and `BACKEND_URL` must match it or the URL sent to PayHere points at
+localhost and nothing ever arrives.
+
+---
+
 ## Open items
 
 These are **not** done yet and matter before real customers:
@@ -516,12 +587,13 @@ These are **not** done yet and matter before real customers:
    on every one of 266 endpoints applying its own `organization_id` filter.
    The 25-probe IDOR sweep is the compensating control, not a substitute for
    PostgreSQL row-level security.
-7. **No payments are collected.** Plans, prices, metering and quota enforcement
-   all work; nothing charges a card. Needs a Stripe account, then
-   `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in the server `.env`. The
-   Billing screen lists this rather than showing a fake upgrade button — one
-   that changed a plan without taking payment would look finished while giving
-   the product away.
+7. **Payments run through PayHere** (see the Payments section above), but
+   `PAYHERE_MERCHANT_ID` / `PAYHERE_MERCHANT_SECRET` are still unset on the
+   server, so `/settings/billing` shows "payments aren't configured" rather
+   than an upgrade button. Set both and turn `PAYHERE_SANDBOX` off to start
+   collecting. Note that **monthly message allowances are still not enforced**
+   — see `tests/services/test_billing_plan_enforcement.py`, which documents
+   that `usage.check()` is never called for flow metrics.
 8. **CI cannot deploy.** The `Deploy` job fails at *Add SSH key* because the
    `VPS_SSH_KEY` secret is unset, so every deploy so far has been run by hand.
    The `Multi-tenant checks` job does run and passes on every push. To fix:

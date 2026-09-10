@@ -28,6 +28,7 @@ from .platform_metric import PlatformMetric
 from .platform_ai import PlatformAIConfig
 from .platform_backup import PlatformBackupRun, PlatformBackupSettings
 from .plan_snapshot import OrganizationPlanSnapshot
+from .payhere import PayHereOrder, PayHerePayment, PayHereOrderStatus
 from .usage import UsageCounter, current_period
 from .customer import Customer
 from .role import Role
@@ -163,4 +164,7 @@ __all__ = [
     "CrmConnectionStatus",
     "CrmSyncJobStatus",
     "GuardrailEvent",
+    "PayHereOrder",
+    "PayHerePayment",
+    "PayHereOrderStatus",
 ]
