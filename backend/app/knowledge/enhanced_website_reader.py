@@ -1220,6 +1220,11 @@ class EnhancedWebsiteReader(WebsiteReader):
             # gives each piece its own id (`{page_url}_{n}`), so upserting them
             # does not collapse a page back into a single row.
             chunks = self.chunk_document(page) if self.chunk else [page]
+            # FixedSizeChunking returns no chunks when a page is shorter than
+            # its overlap. The crawler already accepted this content, so keep
+            # the short document instead of silently losing the entire page.
+            if not chunks and page.content and page.content.strip():
+                chunks = [page]
             documents.extend(chunks)
             if len(chunks) > 1:
                 logger.info(
@@ -1243,4 +1248,4 @@ class EnhancedWebsiteReader(WebsiteReader):
         duration = end_time - start_time
         logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Completed reading from {url} - Created {len(documents)} documents (Total time: {duration:.2f}s)")
         
-        return documents 
+        return documents

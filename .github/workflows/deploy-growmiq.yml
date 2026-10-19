@@ -1,10 +1,11 @@
 # Deploy ChatterMate to chat.growmiq.io
 #
 # Setup (once), in the GitHub repo → Settings → Secrets and variables → Actions:
-#   VPS_SSH_KEY   private key with root access to 187.77.156.57
-#                 (the pair already on the box is ~/.ssh/checkfunnel_ci_deploy)
+#   VPS_SSH_KEY   dedicated key constrained to scripts/ci_receiver.py
 #   VPS_HOST      187.77.156.57
 #   VPS_USER      root
+#   VPS_KNOWN_HOSTS pinned SSH host public key
+# Enable PRODUCTION_DEPLOY_ENABLED only after the read-only connection check.
 #
 # Images are built ON the VPS rather than here and pushed to a registry. That is
 # the pragmatic choice for one 2-vCPU box: the backend image is 4.5 GB, so
@@ -17,6 +18,14 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy app images after checks (false only verifies the connection)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 concurrency:
   # Never let two deploys touch the box at once — the second would rebuild
@@ -110,6 +119,9 @@ jobs:
       - name: Shell syntax
         run: bash -n scripts/*.sh
 
+      - name: Deployment boundary checks
+        run: python3 scripts/test_ci_receiver.py
+
   backend-test:
     name: Backend tests
     runs-on: ubuntu-latest
@@ -162,95 +174,59 @@ jobs:
       - name: Type check
         run: npm run type-check
 
-  deploy:
-    name: Deploy
-    # Tests gate the deploy. They previously ran only in test.yml, which is a
-    # SEPARATE workflow triggered by the same push — so it raced this one and a
-    # red suite still shipped to production. Depending on them here is what makes
-    # the gate real.
-    needs: [verify, backend-test, frontend-test]
+  connection:
+    name: Verify existing VPS stack (read only)
+    if: github.repository == 'deemalvidarshana/chattmate'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Check deploy secrets are set
-        # Without these the next step writes an empty key file and ssh fails
-        # with "Permission denied (publickey)", which reads like the key is
-        # wrong rather than absent. Every deploy so far has been run by hand
-        # because of exactly that confusion, so name the cause instead.
+      - name: Configure pinned SSH connection
         env:
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          DEPLOY_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_KEY" && test -n "$KNOWN_HOSTS"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+      - name: Verify protected database, config and mounts
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: >-
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes -o ConnectTimeout=30
+          "$VPS_USER@$VPS_HOST" check
+
+  deploy:
+    name: Deploy ChatterMate app containers only
+    if: >-
+      github.repository == 'deemalvidarshana/chattmate' &&
+      vars.PRODUCTION_DEPLOY_ENABLED == 'true' &&
+      (github.event_name == 'push' || inputs.deploy)
+    needs: [verify, backend-test, frontend-test, connection]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure pinned SSH connection
+        env:
+          DEPLOY_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+      - name: Submit tested commit to the constrained deployment receiver
+        env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
         run: |
-          missing=""
-          [ -n "$VPS_SSH_KEY" ] || missing="$missing VPS_SSH_KEY"
-          [ -n "$VPS_HOST" ]    || missing="$missing VPS_HOST"
-          [ -n "$VPS_USER" ]    || missing="$missing VPS_USER"
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secret(s):$missing"
-            echo "Set them under Settings → Secrets and variables → Actions."
-            echo "  VPS_SSH_KEY  the PRIVATE half of the keypair authorised on the box"
-            echo "  VPS_HOST     the VPS address"
-            echo "  VPS_USER     the SSH user"
-            exit 1
-          fi
-          echo "OK: deploy secrets present"
-
-      - name: Add SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Sync source
-        # .env files are excluded deliberately: production secrets live only on
-        # the VPS and are never checked out here.
-        run: |
-          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key" \
-            --exclude '.git' --exclude 'node_modules' --exclude '__pycache__' \
-            --exclude '*.pyc' --exclude '.venv' --exclude 'dist' --exclude '.coverage' \
-            --exclude 'chattermate-test' --exclude 'temp' --exclude 'uploads' \
-            --exclude '.env' --exclude '.env.growmiq' \
-            ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/chattermate/"
-
-      - name: Build and restart
-        run: |
-          ssh -i ~/.ssh/deploy_key "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            'chmod +x /opt/chattermate/scripts/*.sh && /opt/chattermate/scripts/deploy.sh'
-
-      - name: Smoke test production
-        # Creates and then deletes throwaway tenants against the live site.
-        run: |
-          ssh -i ~/.ssh/deploy_key "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            'docker exec chattermate-redis-1 redis-cli --scan --pattern "public_rl:signup:*" \
-               | xargs -r docker exec chattermate-redis-1 redis-cli DEL >/dev/null 2>&1 || true'
-          ./scripts/tenant_isolation_smoke.sh https://chat.growmiq.io
-
-      - name: Cross-tenant IDOR sweep
-        # 25 probes across organizations, users, roles, agents, widgets,
-        # workflows, knowledge and collection filters. This is the check that
-        # would catch a new endpoint shipping without an organization_id guard —
-        # the failure mode that has no database-level backstop today.
-        #
-        # The operator credentials are optional but worth setting. Without them
-        # the throwaway tenants stay on the free plan, several fixtures cannot
-        # be created because the capability is gated, and those probes skip —
-        # the run still passes, on a narrower surface than it appears to cover.
-        env:
-          PLATFORM_OPERATOR_EMAIL: ${{ secrets.PLATFORM_OPERATOR_EMAIL }}
-          PLATFORM_OPERATOR_PASSWORD: ${{ secrets.PLATFORM_OPERATOR_PASSWORD }}
-        run: |
-          ssh -i ~/.ssh/deploy_key "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            'docker exec chattermate-redis-1 redis-cli --scan --pattern "public_rl:signup:*" \
-               | xargs -r docker exec chattermate-redis-1 redis-cli DEL >/dev/null 2>&1 || true'
-          ./scripts/tenant_isolation_full.sh https://chat.growmiq.io
-
-      - name: Remove test tenants
-        # Inline Python here previously broke the YAML parser outright — the
-        # workflow could not even be read. The logic lives in a script instead.
-        if: always()
-        run: |
-          ssh -i ~/.ssh/deploy_key "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            '/opt/chattermate/scripts/cleanup_test_tenants.sh' || true
+          set -euo pipefail
+          git archive --format=tar "$GITHUB_SHA" | gzip | \
+            ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes -o ConnectTimeout=30 \
+              "$VPS_USER@$VPS_HOST" "deploy $GITHUB_SHA"
+      - name: Check public endpoint (read only)
+        run: curl --fail --silent --show-error --retry 3 https://chat.growmiq.io/ -o /dev/null
