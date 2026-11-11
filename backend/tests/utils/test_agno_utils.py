@@ -127,24 +127,26 @@ class TestCreateModel:
             )
             assert result == mock_model
 
-    def test_create_model_google(self):
-        """Test creating Google Gemini model"""
-        with patch("agno.models.google.Gemini") as mock_gemini:
-            mock_model = MagicMock()
-            mock_gemini.return_value = mock_model
-            
-            result = agno_utils.create_model(
-                model_type="GOOGLE",
-                api_key="test-api-key",
-                model_name="gemini-pro"
-            )
-            
-            mock_gemini.assert_called_once_with(
-                api_key="test-api-key",
-                id="gemini-pro",
-                max_output_tokens=1000  # Gemini's agno model uses max_output_tokens
-            )
-            assert result == mock_model
+    @pytest.mark.parametrize("parse_method", ["parse_provider_response", "parse_provider_response_delta"])
+    def test_create_model_google_preserves_tool_call_signatures(self, parse_method):
+        import json
+        from agno.models.message import Message
+        from google.genai.types import Candidate, Content, FunctionCall, GenerateContentResponse, Part
+
+        model = agno_utils.create_model("GOOGLE", "test-api-key", "gemini-3.5-flash-lite")
+        assert model.id == "gemini-3.5-flash-lite"
+        assert model.max_output_tokens == 1000
+
+        reply = GenerateContentResponse(candidates=[Candidate(content=Content(role="model", parts=[
+            Part(function_call=FunctionCall(name="lookup", args={"page": 1}), thought_signature=b"signature"),
+            Part(function_call=FunctionCall(name="lookup", args={"page": 2})),
+        ]))])
+        parsed = getattr(model, parse_method)(reply)
+        # Conversation storage serializes Agno tool calls as JSON.
+        history = Message(role="assistant", tool_calls=json.loads(json.dumps(parsed.tool_calls)))
+        formatted, _ = model._format_messages([history])
+
+        assert [part.thought_signature for part in formatted[0].parts] == [b"signature", None]
 
     def test_create_model_googlevertex(self):
         """Test creating Google Vertex AI model (should trigger import error)"""
