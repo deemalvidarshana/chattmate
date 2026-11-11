@@ -60,9 +60,9 @@ def create_model(model_type: str, api_key: str, model_name: str, max_tokens: int
             from agno.models.deepseek import DeepSeek
             return DeepSeek(api_key=api_key, id=model_name, max_tokens=max_tokens)
         elif model_type == 'GOOGLE':
-            from agno.models.google import Gemini
+            from app.utils.gemini_tool_signatures import GeminiWithToolSignatures
             # Gemini's agno model exposes max_output_tokens, not max_tokens.
-            return Gemini(api_key=api_key, id=model_name, max_output_tokens=max_tokens)
+            return GeminiWithToolSignatures(api_key=api_key, id=model_name, max_output_tokens=max_tokens)
         elif model_type == 'GOOGLEVERTEX':
             from agno.models.vertexai import Gemini
             return Gemini(api_key=api_key, id=model_name, max_tokens=max_tokens)
@@ -170,4 +170,4 @@ async def test_model_api_key(api_key: str, model_type: str, model_name: str) -> 
         return True
     except Exception as e:
         logger.error(f"API key test failed: {str(e)}")
-        return False 
+        return False
