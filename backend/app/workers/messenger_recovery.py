@@ -17,8 +17,10 @@ from app.services.channel_chat import process_channel_message
 
 logger = get_logger(__name__)
 
-POLL_SECONDS = 30
-WEBHOOK_GRACE = timedelta(seconds=30)
+# Give webhooks a short head start. Both paths claim the same message ID
+# in Redis, so a late webhook cannot start a second reply.
+POLL_SECONDS = 10
+WEBHOOK_GRACE = timedelta(seconds=5)
 LOOKBACK = timedelta(minutes=10)
 PAGE_LIMIT = 25
 MAX_PAGES = 4
