@@ -102,6 +102,9 @@ async def startup_event():
     from app.workers.backup_scheduler import run_backup_scheduler_loop
     asyncio.create_task(run_backup_scheduler_loop())
 
+    from app.workers.messenger_recovery import run_messenger_recovery_loop
+    asyncio.create_task(run_messenger_recovery_loop())
+
 # Include routers
 app.include_router(
     chat.router,

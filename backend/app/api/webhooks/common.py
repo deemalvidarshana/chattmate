@@ -24,7 +24,8 @@ logger = get_logger(__name__)
 DEDUPE_TTL_SECONDS = 60 * 60
 
 
-def is_duplicate_message(channel_type: str, external_message_id: str) -> bool:
+def is_duplicate_message(channel_type: str, external_message_id: str, *,
+                         require_redis: bool = False) -> bool:
     """Atomically claim an inbound message id (Redis SETNX). Returns True when
     the message was already processed. Without Redis, dedupe is skipped —
     single-process deployments rarely see retries fast enough to matter."""
@@ -33,10 +34,14 @@ def is_duplicate_message(channel_type: str, external_message_id: str) -> bool:
     try:
         redis_client = get_redis()
         if redis_client is None:
+            if require_redis:
+                raise RuntimeError("Redis is required to claim a recovered message")
             return False
         key = f"channel_dedupe:{channel_type}:{external_message_id}"
         claimed = redis_client.set(key, "1", nx=True, ex=DEDUPE_TTL_SECONDS)
         return not claimed
     except Exception as e:
+        if require_redis:
+            raise
         logger.error(f"Dedupe check failed (processing anyway): {e}")
         return False
