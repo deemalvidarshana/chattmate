@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.socketio import sio
 from app.channels import get_adapter, WindowStatus
+from app.models.channels import ChannelType
 from app.models.session_to_agent import SessionToAgent
 from app.repositories.channels import ChannelAccountRepository, ChannelConversationRepository
 from app.core.logger import get_logger
@@ -95,4 +96,7 @@ async def _deliver_to_channel(db: Session, session_record: SessionToAgent,
         logger.error(f"Failed delivering to {channel} session {session_id}: {send_result.error}")
         return DeliveryResult(ok=False, reason=send_result.error or 'send_failed',
                               can_template=send_result.can_template)
+    if channel == ChannelType.WHATSAPP.value:
+        logger.info("WhatsApp reply accepted phone_number_id=%s session_id=%s message_id=%r",
+                    account.external_account_id, session_id, send_result.external_message_id)
     return DeliveryResult(ok=True)

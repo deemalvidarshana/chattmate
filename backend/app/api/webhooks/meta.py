@@ -39,6 +39,32 @@ _OBJECT_TO_CHANNEL = {
 }
 
 
+def _log_whatsapp_delivery_statuses(payload: dict, phone_number_ids: set[str]) -> None:
+    """Record Meta's delivery outcome without logging recipients or message content."""
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            if change.get("field") != "messages":
+                continue
+            value = change.get("value") or {}
+            phone_number_id = str((value.get("metadata") or {}).get("phone_number_id", ""))
+            if phone_number_id not in phone_number_ids:
+                continue
+            for update in value.get("statuses") or []:
+                message_id = update.get("id")
+                status = update.get("status")
+                if not isinstance(message_id, str) or not message_id:
+                    continue
+                if status not in ("sent", "delivered", "read", "failed"):
+                    continue
+                error_codes = [
+                    error["code"] for error in update.get("errors") or []
+                    if isinstance(error, dict) and type(error.get("code")) is int
+                ]
+                log = logger.warning if status == "failed" else logger.info
+                log("WhatsApp delivery status=%s phone_number_id=%s message_id=%r error_codes=%s",
+                    status, phone_number_id, message_id, error_codes)
+
+
 @router.get("")
 async def meta_webhook_verify(
     hub_mode: str = Query(None, alias="hub.mode"),
@@ -94,6 +120,12 @@ async def meta_webhook(
     if channel_type is None:
         # Unknown product subscription — ack so Meta doesn't retry forever
         return {"status": "ignored"}
+
+    if channel_type == ChannelType.WHATSAPP.value:
+        _log_whatsapp_delivery_statuses(payload, {
+            account.external_account_id for account in candidates
+            if account.channel_type == channel_type and account.is_active
+        })
 
     adapter = get_adapter(channel_type)
 
