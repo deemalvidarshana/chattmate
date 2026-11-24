@@ -27,6 +27,8 @@ import TelegramConnectModal from '@/components/integrations/TelegramConnectModal
 import MetaChannelConnect from '@/components/integrations/MetaChannelConnect.vue'
 import WhatsAppTemplateManager from '@/components/integrations/WhatsAppTemplateManager.vue'
 import ChannelConnectModal from '@/components/integrations/ChannelConnectModal.vue'
+import TikTokConnectModal from '@/components/integrations/TikTokConnectModal.vue'
+import tiktokLogo from '@/assets/tiktok-logo.svg'
 
 // Import logos
 import jiraLogo from '@/assets/jira-logo.svg'
@@ -61,6 +63,7 @@ const shopifyLoading = ref(true)
 const channelAccounts = ref<ChannelAccount[]>([])
 const channelsLoading = ref(true)
 const showTelegramModal = ref(false)
+const showTikTokModal = ref(false)
 // Which Meta connect modal is open (null = none)
 const metaModalChannel = ref<'whatsapp' | 'messenger' | 'instagram' | null>(null)
 const showTemplateManager = ref(false)
@@ -151,7 +154,9 @@ const crmCardWarning = (connection: CrmConnection | null): string | undefined =>
 const manageIntegration = (integration: IntegrationCard) => {
   const id = integration.id
   const acc = accountsFor(id)[0] ?? null
-  if (CREDENTIAL_CHANNELS.includes(id)) {
+  if (id === 'tiktok') {
+    showTikTokModal.value = true
+  } else if (CREDENTIAL_CHANNELS.includes(id)) {
     credentialModalAccount.value = acc
     credentialModalChannel.value = id as 'email' | 'sms' | 'line'
   } else if (id === 'telegram') {
@@ -478,6 +483,18 @@ const availableIntegrations = computed<IntegrationCard[]>(() => [
         : {})
     }
   }),
+  {
+    id: 'tiktok',
+    name: 'TikTok',
+    description: 'Connect your TikTok account and share videos from Growmiq.',
+    logo: tiktokLogo,
+    category: 'SOCIAL MEDIA',
+    color: 'accent',
+    connected: accountsFor('tiktok').length > 0,
+    teamName: accountsFor('tiktok').map(a => a.display_name).filter(Boolean).join(', '),
+    isLoading: channelsLoading.value,
+    connectAction: () => { showTikTokModal.value = true },
+  },
   ...(['email', 'sms', 'line'] as const).map(channel => {
     const meta = {
       email: { name: 'Email', logo: emailLogo, color: 'purple',
@@ -761,7 +778,7 @@ onMounted(async () => {
             >
               {{ integration.extraActionLabel }}
             </button>
-            <button class="int-btn int-btn-disconnect" @click="showDisconnectConfirmation(integration.id)">
+            <button class="int-btn int-btn-disconnect" @click="integration.id === 'tiktok' ? showTikTokModal = true : showDisconnectConfirmation(integration.id)">
               Disconnect
             </button>
           </div>
@@ -933,6 +950,13 @@ onMounted(async () => {
       </div>
     </div>
   </div>
+
+  <TikTokConnectModal
+    v-if="showTikTokModal"
+    :accounts="accountsFor('tiktok')"
+    @close="showTikTokModal = false"
+    @changed="fetchChannelAccounts"
+  />
 
   <!-- Telegram Connect Modal -->
   <TelegramConnectModal
@@ -1607,4 +1631,4 @@ onMounted(async () => {
   color: var(--error-color);
   margin-top: var(--space-xs);
 }
-</style> 
+</style>

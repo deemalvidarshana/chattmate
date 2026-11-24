@@ -91,6 +91,11 @@ class Settings(BaseSettings):
     SLACK_CLIENT_SECRET: str = os.getenv("SLACK_CLIENT_SECRET", "")
     SLACK_SIGNING_SECRET: str = os.getenv("SLACK_SIGNING_SECRET", "")
 
+    # TikTok Content Posting (separate from the Business Messaging app).
+    TIKTOK_CLIENT_KEY: str = ""
+    TIKTOK_CLIENT_SECRET: str = ""
+    TIKTOK_PUBLIC_POSTING_ENABLED: bool = False
+
     # CRM lead push (HubSpot / Pipedrive). OAuth redirect URIs are derived from
     # BACKEND_URL, not configured. Self-hosters supply their own OAuth app creds.
     HUBSPOT_CLIENT_ID: str = os.getenv("HUBSPOT_CLIENT_ID", "")

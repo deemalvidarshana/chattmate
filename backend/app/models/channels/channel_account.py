@@ -38,6 +38,7 @@ class ChannelType(str, enum.Enum):
     MESSENGER = "messenger"
     INSTAGRAM = "instagram"
     SLACK = "slack"
+    TIKTOK = "tiktok"
     EMAIL = "email"
     SMS = "sms"
     LINE = "line"

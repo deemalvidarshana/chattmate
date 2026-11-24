@@ -26,6 +26,7 @@ export type ChannelType =
   | 'messenger'
   | 'instagram'
   | 'slack'
+  | 'tiktok'
   | 'email'
   | 'sms'
   | 'line'

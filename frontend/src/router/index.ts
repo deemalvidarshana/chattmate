@@ -193,6 +193,12 @@ const baseRoutes = [
     },
   },
   {
+    path: '/integrations/tiktok/callback',
+    name: 'tiktok-callback',
+    component: () => import('@/views/TikTokCallbackView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/settings/integrations',
     name: 'integrations-settings',
     component: IntegrationsSettings,

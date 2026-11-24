@@ -21,6 +21,7 @@ from app.api.channels.telegram import router as telegram_router
 from app.api.channels.meta import router as meta_router
 from app.api.channels.whatsapp_messaging import router as whatsapp_messaging_router
 from app.api.channels.slack import router as slack_router
+from app.api.channels.tiktok import router as tiktok_router
 from app.api.channels.email import router as email_router
 from app.api.channels.sms import router as sms_router
 from app.api.channels.line import router as line_router
@@ -34,6 +35,7 @@ router.include_router(meta_router, prefix="/meta", tags=["channels"])
 # Same prefix: onboarding and messaging are separate modules, one URL space.
 router.include_router(whatsapp_messaging_router, prefix="/meta", tags=["channels"])
 router.include_router(slack_router, prefix="/slack", tags=["channels"])
+router.include_router(tiktok_router, prefix="/tiktok", tags=["channels"])
 router.include_router(email_router, prefix="/email", tags=["channels"])
 router.include_router(sms_router, prefix="/sms", tags=["channels"])
 router.include_router(line_router, prefix="/line", tags=["channels"])
