@@ -22,6 +22,7 @@ import { resolveLandingRoute } from '@/router/landing'
 import { useEnterpriseFeatures } from '@/composables/useEnterpriseFeatures'
 import { useForgotPassword } from '@/composables/useForgotPassword'
 import InstallPrompt from '@/components/pwa/InstallPrompt.vue'
+import LegalLinks from '@/components/common/LegalLinks.vue'
 import { apiPath, getApiUrl } from '@/config/api'
 import api from '@/services/api'
 import type { AxiosError } from 'axios'
@@ -338,6 +339,7 @@ const handleVerifyAndResetPassword = async () => {
                 </p>
             </form>
 
+            <LegalLinks />
             <div class="install-hint-slot">
                 <InstallPrompt />
             </div>

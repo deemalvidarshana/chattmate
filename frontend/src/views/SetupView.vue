@@ -23,6 +23,7 @@ import { userService } from '@/services/user'
 import { validatePassword, validateDomain, validateEmail, validateName, validateOrgName, type PasswordStrength } from '@/utils/validators'
 import { extractApiError } from '@/utils/apiError'
 import InstallPrompt from '@/components/pwa/InstallPrompt.vue'
+import LegalLinks from '@/components/common/LegalLinks.vue'
 // @ts-ignore
 import { clientTz } from 'timezone-select-js'
 import type { BusinessHoursDict } from '@/types/organization'
@@ -324,6 +325,13 @@ const handleSubmit = async () => {
                         9–5, Monday to Friday. Both are editable in settings later.
                     </p>
 
+                    <p class="legal-note">
+                        By creating a workspace, you agree to the
+                        <a href="/terms.html" class="signup-link">Terms of Service</a>.
+                        See our <a href="/privacy.html" class="signup-link">Privacy Policy</a>
+                        for how we handle your information.
+                    </p>
+
                     <p class="signup-prompt">
                         Already have an account?
                         <router-link to="/login" class="signup-link">Sign in</router-link>
@@ -331,6 +339,7 @@ const handleSubmit = async () => {
                 </form>
             </template>
 
+            <LegalLinks />
             <div class="install-hint-slot">
                 <InstallPrompt />
             </div>

@@ -37,11 +37,11 @@ const timezones = ref(listTz())
 
 // Danger zone — no destructive API yet; route the user to support.
 const onTransferOwnership = () => {
-  window.alert('To transfer ownership, please contact support@chattermate.chat.')
+  window.alert('To transfer ownership, please contact deemal@checkfunnel.com.')
 }
 const onDeleteOrganization = () => {
   if (window.confirm('Permanently delete this organization and all its data? This cannot be undone.')) {
-    window.alert('Organization deletion must be completed by support — please contact support@chattermate.chat.')
+    window.alert('Organization deletion must be completed by support — please contact deemal@checkfunnel.com.')
   }
 }
 

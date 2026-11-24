@@ -363,8 +363,8 @@ const openNotificationsFromSheet = () => {
                 <div class="footer-content">
                     <p>&copy; 2024 Growmiq mini. All rights reserved.</p>
                     <nav class="footer-links">
-                        <a href="https://chattermate.chat/privacy_policy.html">Privacy Policy</a>
-                        <a href="https://chattermate.chat/terms_and_conditions.html">Terms of Service</a>
+                        <a href="/privacy.html">Privacy Policy</a>
+                        <a href="/terms.html">Terms of Service</a>
                     </nav>
                 </div>
             </footer>
