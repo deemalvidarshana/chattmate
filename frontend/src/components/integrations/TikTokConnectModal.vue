@@ -40,7 +40,7 @@ const canSubmit = computed(() => !!file.value && duration.value > 0 && !!creator
 
 function stopPolling() { window.clearTimeout(pollTimer) }
 function resetVideo() {
-  if (preview.value) URL.revokeObjectURL(preview.value)
+  if (preview.value.startsWith('blob:')) URL.revokeObjectURL(preview.value)
   preview.value = ''; file.value = null; duration.value = 0; consent.value = false
 }
 async function loadCreator() {
@@ -108,6 +108,27 @@ function videoMetadata(event: Event) {
   if (creator.value?.max_video_post_duration_sec && video.duration > creator.value.max_video_post_duration_sec) {
     error.value = `This account supports videos up to ${creator.value.max_video_post_duration_sec} seconds.`
   }
+}
+function videoPreviewError() {
+  const chosen = file.value
+  if (!chosen || !preview.value.startsWith('blob:')) {
+    error.value = 'This video could not be previewed. Choose another file.'
+    return
+  }
+  // Some embedded browsers reject blob media URLs. Keep the original File for upload.
+  const oldUrl = preview.value
+  const reader = new FileReader()
+  reader.onload = () => {
+    if (file.value !== chosen || preview.value !== oldUrl) return
+    if (typeof reader.result !== 'string' || !reader.result.startsWith('data:video/')) {
+      error.value = 'This video could not be previewed. Choose another file.'
+      return
+    }
+    URL.revokeObjectURL(oldUrl)
+    preview.value = reader.result
+  }
+  reader.onerror = () => { if (file.value === chosen) error.value = 'This video could not be previewed. Choose another file.' }
+  reader.readAsDataURL(chosen)
 }
 function rememberPost(id: string) {
   try { sessionStorage.setItem('tiktok:post:' + id, JSON.stringify(post.value)) } catch { /* storage may be disabled */ }
@@ -182,7 +203,7 @@ onBeforeUnmount(() => {
       <template v-if="creator && (creator.can_publish || creator.can_upload)">
         <label>Share as<select v-model="mode" :disabled="busy"><option v-if="creator.can_publish" value="direct">Post to TikTok</option><option v-if="creator.can_upload" value="draft">Send to TikTok inbox</option></select></label>
         <label>Video<input type="file" accept="video/mp4,video/quicktime,video/webm" :disabled="busy" @change="chooseVideo" /><small>MP4, MOV or WebM · up to 20 MB<span v-if="creator.max_video_post_duration_sec"> · up to {{ creator.max_video_post_duration_sec }} seconds</span></small></label>
-        <video v-if="preview" :key="preview" :src="preview" controls preload="metadata" @loadedmetadata="videoMetadata" @error="error = 'This video could not be previewed. Choose another file.'" />
+        <video v-if="preview" :key="preview" :src="preview" controls preload="metadata" @loadedmetadata="videoMetadata" @error="videoPreviewError" />
         <template v-if="mode === 'direct'">
           <label>Caption<textarea v-model="caption" maxlength="2200" rows="3" :disabled="busy" placeholder="Write a caption…" /></label>
           <label>Who can watch this video?<select v-model="privacy" :disabled="busy"><option value="" disabled>Choose a privacy setting</option><option v-for="p in creator.privacy_level_options" :key="p" :value="p">{{ privacyNames[p] || p }}</option></select></label>
