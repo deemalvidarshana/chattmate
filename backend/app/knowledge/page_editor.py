@@ -110,6 +110,18 @@ def get_manager(organization_id) -> KnowledgeManager:
     return KnowledgeManager(org_id=organization_id, agent_id=None)
 
 
+def ensure_vector_store(manager: KnowledgeManager) -> None:
+    """Create a new organization's vector table before its first write.
+
+    Website and PDF knowledge bases already do this in their ``load`` methods.
+    Pasted text writes directly through ``upsert``, so on a brand-new
+    organization it previously attempted to write to a table that did not yet
+    exist and returned a generic 500 error.
+    """
+    if not manager.vector_db.exists():
+        manager.vector_db.create()
+
+
 def agent_ids_for(knowledge: Knowledge) -> List[str]:
     """Return the agent ids linked to a knowledge source (for vector filters)."""
     return [str(link.agent_id) for link in knowledge.agent_links]
@@ -287,6 +299,11 @@ def create_text_source(
         org_id=organization_id, agent_id=str(agent_id) if agent_id else None
     )
     agent_ids = [str(agent_id)] if agent_id else []
+
+    # A new organization has no per-tenant vector table until its first source
+    # is indexed. URL/PDF loaders create it themselves; direct text writes must
+    # do the same before embedding/upserting.
+    ensure_vector_store(manager)
 
     # Embed first — an embedding failure then creates no source row at all.
     # Each vector row stays below the local embedder's context limit. The

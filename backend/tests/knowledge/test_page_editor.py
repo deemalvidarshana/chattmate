@@ -1,4 +1,7 @@
-from app.knowledge.page_editor import split_text_for_embedding
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+from app.knowledge.page_editor import ensure_vector_store, split_text_for_embedding
 
 
 def test_split_text_for_embedding_keeps_chunks_within_limit():
@@ -28,3 +31,23 @@ def test_split_text_for_embedding_always_makes_progress():
     assert chunks
     assert all(0 < len(chunk) <= 100 for chunk in chunks)
     assert chunks[-1].endswith("x")
+
+
+def test_ensure_vector_store_creates_missing_tenant_table():
+    vector_db = MagicMock()
+    vector_db.exists.return_value = False
+    manager = SimpleNamespace(vector_db=vector_db)
+
+    ensure_vector_store(manager)
+
+    vector_db.create.assert_called_once_with()
+
+
+def test_ensure_vector_store_keeps_existing_tenant_table():
+    vector_db = MagicMock()
+    vector_db.exists.return_value = True
+    manager = SimpleNamespace(vector_db=vector_db)
+
+    ensure_vector_store(manager)
+
+    vector_db.create.assert_not_called()
