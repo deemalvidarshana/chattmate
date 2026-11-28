@@ -54,8 +54,8 @@ class TestEnhancedPDFKnowledgeBase:
         kb = EnhancedPDFKnowledgeBase(path="/test/path")
         kb.vector_db = None
 
-        # Should return early without error
-        kb.load()
+        with pytest.raises(RuntimeError, match="No vector database"):
+            kb.load()
 
     def test_load_no_reader(self, mock_vector_db):
         """Test load when no reader is provided"""
@@ -63,8 +63,8 @@ class TestEnhancedPDFKnowledgeBase:
         kb.vector_db = mock_vector_db
         kb.reader = None
 
-        # Should return early without error
-        kb.load()
+        with pytest.raises(RuntimeError, match="No PDF reader"):
+            kb.load()
 
     def test_load_recreate_db(self, mock_vector_db, mock_reader):
         """Test load with recreate=True"""
@@ -75,7 +75,8 @@ class TestEnhancedPDFKnowledgeBase:
             kb.vector_db = mock_vector_db
             kb.reader = mock_reader
 
-            kb.load(recreate=True)
+            with pytest.raises(ValueError, match="No readable text"):
+                kb.load(recreate=True)
 
             mock_vector_db.drop.assert_called_once()
             mock_vector_db.create.assert_called_once()
@@ -91,7 +92,8 @@ class TestEnhancedPDFKnowledgeBase:
             kb.vector_db = mock_vector_db
             kb.reader = mock_reader
 
-            kb.load(recreate=False)
+            with pytest.raises(ValueError, match="No readable text"):
+                kb.load(recreate=False)
 
             mock_vector_db.create.assert_called_once()
 
@@ -157,8 +159,8 @@ class TestEnhancedPDFKnowledgeBase:
             kb.vector_db = mock_vector_db
             kb.reader = mock_reader
 
-            # Should not raise, but log error
-            kb.load(upsert=True)
+            with pytest.raises(RuntimeError, match="Failed to embed PDF content"):
+                kb.load(upsert=True)
 
     def test_load_upsert_error(self, mock_vector_db, mock_reader, mock_document):
         """Test load when upsert fails"""
@@ -171,8 +173,21 @@ class TestEnhancedPDFKnowledgeBase:
             kb.vector_db = mock_vector_db
             kb.reader = mock_reader
 
-            # Should not raise, but log error
-            kb.load(upsert=True)
+            with pytest.raises(RuntimeError, match="Failed to save PDF content"):
+                kb.load(upsert=True)
+
+    def test_load_rejects_empty_extraction(self, mock_vector_db, mock_reader):
+        """An image-only/empty extraction must trigger the OCR fallback upstream."""
+        with patch.object(
+            EnhancedPDFKnowledgeBase, 'document_lists', new_callable=PropertyMock
+        ) as mock_doc_lists:
+            mock_doc_lists.return_value = [[]]
+            kb = EnhancedPDFKnowledgeBase(path="/test/path")
+            kb.vector_db = mock_vector_db
+            kb.reader = mock_reader
+
+            with pytest.raises(ValueError, match="No readable text"):
+                kb.load(upsert=True)
 
     def test_load_skip_upsert(self, mock_vector_db, mock_reader, mock_document):
         """Test load with upsert=False"""

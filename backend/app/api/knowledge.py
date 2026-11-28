@@ -422,7 +422,10 @@ async def get_explore_progress(
             "crawled_urls": crawled_urls_info["all_urls"],
             "crawled_count": crawled_urls_info["count"],
             "is_complete": status_str.upper() in ["COMPLETED", "FAILED"],
-            "error_message": getattr(queue_item, 'error_message', None)
+            # KnowledgeQueue stores failures in `error`.  The previous attribute
+            # name never existed, hiding the actionable PDF/embedding reason from
+            # the progress UI.
+            "error_message": queue_item.error
         }
 
     except HTTPException:

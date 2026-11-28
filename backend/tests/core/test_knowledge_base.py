@@ -120,11 +120,8 @@ async def test_add_pdf_urls_failure(knowledge_manager):
         # Configure mock to raise exception
         mock_pdf_kb.side_effect = Exception("Failed to load PDF")
         
-        # Execute
-        result = await knowledge_manager.add_pdf_urls(urls)
-        
-        # Assert
-        assert result is False
+        with pytest.raises(RuntimeError, match="PDF URL processing failed"):
+            await knowledge_manager.add_pdf_urls(urls)
 
 @pytest.mark.asyncio
 async def test_add_websites_success(knowledge_manager, mock_knowledge):
@@ -177,6 +174,50 @@ async def test_add_pdf_files_success(knowledge_manager, mock_knowledge):
         mock_pdf_kb.assert_called_once()
         mock_pdf_kb_instance.load.assert_called_once()
         mock_add_source.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_add_pdf_files_uses_image_reader_after_empty_text_extraction(
+    knowledge_manager, mock_knowledge
+):
+    """Image-only PDFs should retry with OCR instead of being marked complete."""
+    files = ["/path/to/scan.pdf"]
+
+    with patch('app.knowledge.knowledge_base.EnhancedPDFKnowledgeBase') as mock_pdf_kb, \
+         patch('app.knowledge.knowledge_base.PDFImageReader') as mock_image_reader, \
+         patch('os.path.exists', return_value=True), \
+         patch('os.path.getsize', return_value=1024), \
+         patch('os.path.basename', return_value="scan.pdf"), \
+         patch('os.path.splitext', return_value=("scan", ".pdf")), \
+         patch.object(
+             knowledge_manager, '_add_knowledge_source', return_value=mock_knowledge
+         ) as mock_add_source:
+        text_kb = MagicMock()
+        text_kb.load.side_effect = ValueError("No readable text was extracted from the PDF")
+        image_kb = MagicMock()
+        mock_pdf_kb.side_effect = [text_kb, image_kb]
+
+        result = await knowledge_manager.add_pdf_files(files)
+
+        assert result is True
+        assert mock_pdf_kb.call_count == 2
+        mock_image_reader.assert_called_once()
+        image_kb.load.assert_called_once()
+        mock_add_source.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_add_pdf_files_surfaces_processing_error(knowledge_manager):
+    """Both reader failures should retain an actionable queue error."""
+    files = ["/path/to/broken.pdf"]
+
+    with patch('app.knowledge.knowledge_base.EnhancedPDFKnowledgeBase') as mock_pdf_kb, \
+         patch('os.path.exists', return_value=True), \
+         patch('os.path.getsize', return_value=1024):
+        kb = MagicMock()
+        kb.load.side_effect = ValueError("No readable text was extracted from the PDF")
+        mock_pdf_kb.return_value = kb
+
+        with pytest.raises(RuntimeError, match="PDF processing failed"):
+            await knowledge_manager.add_pdf_files(files)
 
 def test_get_knowledge_base_for_agent(knowledge_manager, mock_knowledge):
     """Test getting knowledge base for a specific agent"""
@@ -252,6 +293,27 @@ async def test_process_knowledge_pdf_file(knowledge_manager):
         mock_remove.assert_called_once_with(queue_item.source)
 
 @pytest.mark.asyncio
+async def test_process_knowledge_pdf_failure_is_not_marked_complete(knowledge_manager):
+    queue_item = MagicMock()
+    queue_item.id = 123
+    queue_item.source_type = "pdf_file"
+    queue_item.source = "/path/to/broken.pdf"
+
+    with patch.object(
+        knowledge_manager, 'add_pdf_files', side_effect=RuntimeError("PDF extraction failed")
+    ), patch('os.remove') as mock_remove, patch(
+        'app.knowledge.knowledge_base.KnowledgeQueueRepository'
+    ) as mock_queue_repo_cls:
+        mock_queue_repo = MagicMock()
+        mock_queue_repo_cls.return_value = mock_queue_repo
+
+        with pytest.raises(RuntimeError, match="PDF extraction failed"):
+            await knowledge_manager.process_knowledge(queue_item)
+
+        mock_queue_repo.update_status.assert_not_called()
+        mock_remove.assert_not_called()
+
+@pytest.mark.asyncio
 async def test_process_knowledge_unsupported_type(knowledge_manager):
     """Test processing unsupported knowledge type"""
     # Setup
@@ -260,4 +322,4 @@ async def test_process_knowledge_unsupported_type(knowledge_manager):
     
     # Execute and Assert
     with pytest.raises(ValueError, match="Unsupported source type: unsupported_type"):
-        await knowledge_manager.process_knowledge(queue_item) 
+        await knowledge_manager.process_knowledge(queue_item)

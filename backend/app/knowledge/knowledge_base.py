@@ -222,7 +222,7 @@ class KnowledgeManager:
             return True
         except Exception as e:
             logger.error(f"Error adding PDF URLs: {str(e)}")
-            return False
+            raise RuntimeError(f"PDF URL processing failed: {e}") from e
 
     async def add_websites(self, urls: List[str], max_links: int = 10) -> bool:
         """Add knowledge from websites using the enhanced website reader"""
@@ -356,7 +356,7 @@ class KnowledgeManager:
             return True
         except Exception as e:
             logger.error(f"Error adding PDF files: {str(e)}")
-            return False
+            raise RuntimeError(f"PDF processing failed: {e}") from e
 
     def get_knowledge_base(self) -> List[Dict]:
         """Get all knowledge sources for the organization or specific agent"""
@@ -401,6 +401,9 @@ class KnowledgeManager:
                     # Process the PDF (already async, but contains blocking operations)
                     success = await self.add_pdf_files([queue_item.source])
                     
+                    if not success:
+                        raise RuntimeError("PDF processing did not produce any knowledge")
+
                     # Update to embedding/training stage
                     queue_repo.update_progress(
                         queue_item.id, 
@@ -414,12 +417,6 @@ class KnowledgeManager:
                     if not queue_item.source.startswith('http') and os.path.exists(queue_item.source):
                         os.remove(queue_item.source)
                     
-                    # Mark as completed
-                    queue_repo.update_status(
-                        queue_item.id, 
-                        QueueStatus.COMPLETED
-                    )
-
                 elif queue_item.source_type == 'pdf_url':
                     # Update to crawling stage (downloading PDF)
                     queue_repo.update_progress(
@@ -433,6 +430,9 @@ class KnowledgeManager:
                     # Process the PDF URL (already async, but contains blocking operations)
                     success = await self.add_pdf_urls([queue_item.source])
                     
+                    if not success:
+                        raise RuntimeError("PDF URL processing did not produce any knowledge")
+
                     # Update to embedding/training stage
                     queue_repo.update_progress(
                         queue_item.id, 
@@ -442,12 +442,6 @@ class KnowledgeManager:
                         force_stage_update=True
                     )
                     
-                    # Mark as completed
-                    queue_repo.update_status(
-                        queue_item.id, 
-                        QueueStatus.COMPLETED
-                    )
-
                 elif queue_item.source_type == 'website':
                     # Update to crawling stage (don't add main URL here, let the crawler handle it)
                     queue_repo.update_progress(

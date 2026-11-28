@@ -42,8 +42,7 @@ class EnhancedPDFKnowledgeBase(PDFKnowledgeBase):
             filters (Optional[Dict[str, Any]], optional): Metadata filters to apply to the documents. Defaults to None.
         """
         if self.vector_db is None:
-            logger.warning("No vector db provided")
-            return
+            raise RuntimeError("No vector database is configured for PDF processing")
 
         if recreate:
             self.vector_db.drop()
@@ -55,11 +54,18 @@ class EnhancedPDFKnowledgeBase(PDFKnowledgeBase):
 
         # Read documents from PDF
         if self.reader is None:
-            logger.warning("No reader provided")
-            return
+            raise RuntimeError("No PDF reader is configured")
+
+        # Materialise extraction before writing anything.  The old implementation
+        # silently accepted an empty extraction, so image-only/corrupt PDFs never
+        # reached the PDFImageReader fallback in KnowledgeManager.
+        document_lists = [documents for documents in self.document_lists if documents]
+        document_count = sum(len(documents) for documents in document_lists)
+        if document_count == 0:
+            raise ValueError("No readable text was extracted from the PDF")
 
         # Get documents and embed them
-        for document_list in self.document_lists:
+        for document_list in document_lists:
             # Embed documents if embedder is available
             if self.vector_db and hasattr(self.vector_db, 'embedder'):
                 for document in document_list:
@@ -67,7 +73,9 @@ class EnhancedPDFKnowledgeBase(PDFKnowledgeBase):
                         try:
                             document.embed(embedder=self.vector_db.embedder)
                         except Exception as e:
-                            logger.error(f"Error embedding document {document.id}: {str(e)}")
+                            raise RuntimeError(
+                                f"Failed to embed PDF content (document {document.id}): {e}"
+                            ) from e
             
             # Upsert documents with filters
             if upsert and self.vector_db:
@@ -75,7 +83,7 @@ class EnhancedPDFKnowledgeBase(PDFKnowledgeBase):
                     logger.debug(f"Upserting {len(document_list)} documents with filters: {filters}")
                     self.vector_db.upsert(documents=document_list, filters=filters)
                 except Exception as e:
-                    logger.error(f"Error upserting documents: {str(e)}")
+                    raise RuntimeError(f"Failed to save PDF content: {e}") from e
         
         logger.info(f"Completed loading PDF knowledge base: {self.path}")
 

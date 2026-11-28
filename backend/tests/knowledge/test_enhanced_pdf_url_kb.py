@@ -71,18 +71,16 @@ class TestEnhancedPDFUrlKnowledgeBase:
         """Test load method when no vector db is provided"""
         kb = EnhancedPDFUrlKnowledgeBase(urls=TEST_URLS)
 
-        with patch('app.knowledge.enhanced_pdf_url_kb.logger') as mock_logger:
+        with pytest.raises(RuntimeError, match="No vector database"):
             kb.load()
-            mock_logger.warning.assert_called_with("No vector db provided")
 
     def test_load_without_urls(self, mock_vector_db):
         """Test load method when no URLs are provided"""
         kb = EnhancedPDFUrlKnowledgeBase(urls=[])
         kb.vector_db = mock_vector_db
 
-        with patch('app.knowledge.enhanced_pdf_url_kb.logger') as mock_logger:
+        with pytest.raises(ValueError, match="No PDF URLs"):
             kb.load()
-            mock_logger.warning.assert_called_with("No URLs provided")
 
     def test_load_with_recreate_true(self, mock_vector_db):
         """Test load method with recreate=True"""
@@ -214,8 +212,8 @@ class TestEnhancedPDFUrlKnowledgeBase:
             # Verify upsert was called for each document list
             assert mock_vector_db.upsert.call_count == 2
 
-    def test_load_handles_embedding_error(self, mock_vector_db, mock_embedder):
-        """Test load method handles embedding errors gracefully"""
+    def test_load_surfaces_embedding_error(self, mock_vector_db, mock_embedder):
+        """Embedding errors must fail the import instead of creating an empty source."""
         kb = EnhancedPDFUrlKnowledgeBase(urls=TEST_URLS)
         kb.vector_db = mock_vector_db
         mock_vector_db.embedder = mock_embedder
@@ -227,28 +225,30 @@ class TestEnhancedPDFUrlKnowledgeBase:
 
         with patch.object(type(kb), 'document_lists', new_callable=PropertyMock) as mock_doc_lists:
             mock_doc_lists.return_value = iter([[doc1]])
-            with patch('app.knowledge.enhanced_pdf_url_kb.logger') as mock_logger:
+            with pytest.raises(RuntimeError, match="Failed to embed PDF content"):
                 kb.load()
 
-                # Verify error was logged
-                mock_logger.error.assert_any_call(f"Error embedding document {doc1.id}: Embedding error")
+            mock_vector_db.upsert.assert_not_called()
 
-                # Verify upsert was still called despite embedding error
-                mock_vector_db.upsert.assert_called_once()
-
-    def test_load_handles_upsert_error(self, mock_vector_db):
-        """Test load method handles upsert errors gracefully"""
+    def test_load_surfaces_upsert_error(self, mock_vector_db):
+        """Vector save errors must be reported to the queue/UI."""
         kb = EnhancedPDFUrlKnowledgeBase(urls=TEST_URLS)
         kb.vector_db = mock_vector_db
         mock_vector_db.upsert.side_effect = Exception("Upsert error")
 
         with patch.object(type(kb), 'document_lists', new_callable=PropertyMock) as mock_doc_lists:
             mock_doc_lists.return_value = iter([TEST_DOCUMENTS])
-            with patch('app.knowledge.enhanced_pdf_url_kb.logger') as mock_logger:
+            with pytest.raises(RuntimeError, match="Failed to save PDF content"):
                 kb.load()
 
-                # Verify error was logged
-                mock_logger.error.assert_any_call("Error upserting documents: Upsert error")
+    def test_load_rejects_empty_extraction(self, mock_vector_db):
+        kb = EnhancedPDFUrlKnowledgeBase(urls=TEST_URLS)
+        kb.vector_db = mock_vector_db
+
+        with patch.object(type(kb), 'document_lists', new_callable=PropertyMock) as mock_doc_lists:
+            mock_doc_lists.return_value = iter([[]])
+            with pytest.raises(ValueError, match="No readable text"):
+                kb.load()
 
     def test_load_with_filters_and_upsert(self, mock_vector_db):
         """Test load method with both filters and upsert enabled"""
