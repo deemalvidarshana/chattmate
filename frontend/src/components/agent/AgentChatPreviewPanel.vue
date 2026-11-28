@@ -41,6 +41,10 @@ console.log('AgentChatPreviewPanel props:', props.customization)
 const isExpanded = ref(true)
 const emailInput = ref('')
 const hasStartedChat = ref(false)
+const showCallButton = computed(() => {
+    const metadata = props.customization.customization_metadata as Record<string, any> | undefined
+    return metadata?.widget_display?.show_call_button !== false
+})
 
 // Chat initiation message state
 const showInitiationMessage = ref(false)
@@ -633,6 +637,18 @@ const handleInitiationClick = () => {
                         </div>
                     </div>
                 </div>
+                <button
+                    v-if="showCallButton"
+                    type="button"
+                    class="header-call-preview"
+                    :style="messageNameStyles"
+                    title="Voice call button preview"
+                    aria-label="Voice call button preview"
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.62 2.63a2 2 0 0 1-.45 2.11L8 9.73a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.85.29 1.73.5 2.63.62A2 2 0 0 1 22 16.92z"></path>
+                    </svg>
+                </button>
             </div>
             <div v-if="!isActive" class="disabled-overlay">
                 <div class="disabled-content">
@@ -835,6 +851,21 @@ const handleInitiationClick = () => {
     font-size: 14px;
     font-weight: 600;
     line-height: 1.1;
+}
+
+.header-call-preview {
+    width: 34px;
+    height: 34px;
+    border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, currentColor 7%, transparent);
+    color: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: default;
+    flex-shrink: 0;
 }
 
 

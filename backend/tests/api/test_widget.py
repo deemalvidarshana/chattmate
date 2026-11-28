@@ -24,11 +24,27 @@ from app.models.user import User
 from app.models.agent import Agent, AgentType
 from app.models.agent import AgentCustomization
 from uuid import UUID, uuid4
+from types import SimpleNamespace
 from app.api import widget as widget_router
 from app.core.auth import get_current_user
 from app.main import app
 from app.core.config import settings
 from tests.conftest import engine, TestingSessionLocal
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        (None, True),
+        ({}, True),
+        ({"widget_display": {}}, True),
+        ({"widget_display": {"show_call_button": True}}, True),
+        ({"widget_display": {"show_call_button": False}}, False),
+    ],
+)
+def test_voice_button_allowed_per_widget(metadata, expected):
+    customization = SimpleNamespace(customization_metadata=metadata)
+    assert widget_router._voice_button_allowed(customization) is expected
 
 # Create a test FastAPI app
 app = FastAPI()
@@ -176,4 +192,4 @@ def test_get_widget_data_without_token(client: TestClient, test_widget: Widget):
     response = client.get(f"/api/v1/widgets/{test_widget.id}")
     # This endpoint may return 200 if no auth is required, or 401 if auth is required
     # The test setup determines what's required
-    assert response.status_code in [200, 401] 
+    assert response.status_code in [200, 401]

@@ -226,6 +226,7 @@ const widgetDisplay = computed<Record<string, any>>(() =>
 const activeDisplayMode = computed(() => widgetDisplay.value.mode ?? 'floating')
 const isSidebarMode = computed(() =>
     activeDisplayMode.value === 'sidebar-left' || activeDisplayMode.value === 'sidebar-right')
+const showCallButton = computed(() => widgetDisplay.value.show_call_button !== false)
 
 // Reassigns metadata wholesale (never mutates in place) so the deep watcher and
 // save round-trip always see a fresh object; unset values are removed entirely,
@@ -663,6 +664,19 @@ const isSectionExpanded = (sectionId: string) => {
                     <span class="citations-toggle-text">
                         <span class="citations-toggle-title">Let visitors start a new chat</span>
                         <span class="citations-toggle-desc">Adds a “New chat” control that ends the conversation and starts a fresh one. Hidden while a human agent is handling the chat.</span>
+                    </span>
+                </label>
+
+                <label class="citations-toggle">
+                    <input
+                        type="checkbox"
+                        :checked="showCallButton"
+                        @change="setDisplay('show_call_button', ($event.target as HTMLInputElement).checked)"
+                    >
+                    <span class="citations-toggle-track"><span class="citations-toggle-thumb"></span></span>
+                    <span class="citations-toggle-text">
+                        <span class="citations-toggle-title">Show voice call button</span>
+                        <span class="citations-toggle-desc">Displays the phone icon in this widget's header. Web Voice must also be enabled in AI Configuration.</span>
                     </span>
                 </label>
             </div>

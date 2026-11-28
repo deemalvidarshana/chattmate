@@ -31,6 +31,7 @@ class TestWidgetDisplayValidation:
                 "mode": "sidebar-left",
                 "side": "left",
                 "launcher": False,
+                "show_call_button": False,
                 "width": 420,
                 "height": 700,
                 "sidebar_width": 480,
@@ -44,6 +45,7 @@ class TestWidgetDisplayValidation:
         display = result.customization_metadata["widget_display"]
         assert display["mode"] == "sidebar-left"
         assert display["launcher"] is False
+        assert display["show_call_button"] is False
         assert display["sidebar_width"] == 480
         # Unknown keys are dropped on write.
         assert "junk_key" not in display
@@ -80,6 +82,7 @@ class TestWidgetDisplayValidation:
         {"z_index": 0},                        # below minimum
         {"search_placeholder": "x" * 200},     # too long
         {"launcher": "maybe"},                 # not bool-coercible
+        {"show_call_button": "maybe"},         # not bool-coercible
         "not-a-dict",                          # wrong shape entirely
     ])
     def test_invalid_values_rejected(self, bad_display):

@@ -45,10 +45,21 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 
-def _voice_enabled(db: Session, organization_id) -> bool:
+def _voice_button_allowed(customization) -> bool:
+    """Return the per-agent widget choice, defaulting on for existing agents."""
+    metadata = getattr(customization, "customization_metadata", None) or {}
+    display = metadata.get("widget_display", {}) if isinstance(metadata, dict) else {}
+    return not isinstance(display, dict) or display.get("show_call_button") is not False
+
+
+def _voice_enabled(db: Session, organization_id, customization=None) -> bool:
     from app.repositories.ai_config import AIConfigRepository
     ai_config = AIConfigRepository(db).get_active_config(organization_id)
-    return bool(ai_config and (ai_config.settings or {}).get("voice", {}).get("enabled"))
+    return bool(
+        ai_config
+        and (ai_config.settings or {}).get("voice", {}).get("enabled")
+        and _voice_button_allowed(customization)
+    )
 
 
 _ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets"
@@ -410,7 +421,7 @@ async def get_widget_data(
                 "customization": customization,
                 "workflow": bool(agent.use_workflow and agent.active_workflow_id),
                 "allow_attachments": agent.allow_attachments,
-                "voice_enabled": _voice_enabled(db, widget.organization_id)
+                "voice_enabled": _voice_enabled(db, widget.organization_id, customization)
             },
             "token": new_token
         }
@@ -447,7 +458,7 @@ async def get_widget_data(
                     "customization": customization,
                     "workflow": bool(agent.use_workflow and agent.active_workflow_id),
                     "allow_attachments": agent.allow_attachments,
-                    "voice_enabled": _voice_enabled(db, widget.organization_id)
+                    "voice_enabled": _voice_enabled(db, widget.organization_id, customization)
                 },
                 "token": new_token
             }
@@ -479,7 +490,7 @@ async def get_widget_data(
             "customization": customization,
             "workflow": bool(agent.use_workflow and agent.active_workflow_id),
             "allow_attachments": agent.allow_attachments,
-            "voice_enabled": _voice_enabled(db, widget.organization_id)
+            "voice_enabled": _voice_enabled(db, widget.organization_id, customization)
         }
     }
 
@@ -518,7 +529,12 @@ async def widget_voice_call(websocket: WebSocket, widget_id: str):
         agent = AgentRepository(db).get_by_id(widget.agent_id)
         ai_config = AIConfigRepository(db).get_active_config(widget.organization_id)
         voice = (ai_config.settings or {}).get("voice", {}) if ai_config else {}
-        if not agent or not ai_config or not voice.get("enabled"):
+        if (
+            not agent
+            or not ai_config
+            or not voice.get("enabled")
+            or not _voice_button_allowed(agent.customization)
+        ):
             await websocket.close(code=4403, reason="Voice calling is not enabled")
             return
         encrypted_voice_key = voice.get("encrypted_api_key")

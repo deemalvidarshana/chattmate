@@ -67,6 +67,10 @@ class WidgetDisplayConfig(BaseModel):
     mode: Optional[WidgetDisplayMode] = None
     side: Optional[WidgetDisplaySide] = None
     launcher: Optional[bool] = None
+    # Per-agent presentation switch. The organization-level Web Voice setting
+    # still controls whether calls are available at all; this only lets a
+    # particular widget template hide or show the header action.
+    show_call_button: Optional[bool] = None
     width: Optional[int] = Field(default=None, ge=280, le=800)
     height: Optional[int] = Field(default=None, ge=400, le=900)
     sidebar_width: Optional[int] = Field(default=None, ge=320, le=640)
