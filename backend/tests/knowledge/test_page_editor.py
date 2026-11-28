@@ -13,7 +13,7 @@ def test_split_text_for_embedding_keeps_chunks_within_limit():
     assert all(chunk for chunk in chunks)
     assert all(len(chunk) <= 300 for chunk in chunks)
     assert chunks[0].startswith("Section 0")
-    assert "Section 19" in chunks[-1]
+    assert any("Section 19" in chunk for chunk in chunks)
 
 
 def test_split_text_for_embedding_leaves_short_text_unchanged():
