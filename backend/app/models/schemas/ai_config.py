@@ -58,6 +58,7 @@ class VoiceConfigUpdate(BaseModel):
     enabled: bool = True
     model_name: str = "gemini-3.8-live"
     voice_name: str = "Aoede"
+    api_key: Optional[SecretStr] = None
 
 
 class VoiceConfigResponse(BaseModel):
@@ -65,3 +66,4 @@ class VoiceConfigResponse(BaseModel):
     model_name: str = "gemini-3.8-live"
     voice_name: str = "Aoede"
     provider: str = "GOOGLE"
+    has_api_key: bool = False

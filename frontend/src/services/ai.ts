@@ -28,6 +28,8 @@ export interface VoiceConfig {
   model_name: string
   voice_name: string
   provider?: string
+  api_key?: string
+  has_api_key?: boolean
 }
 
 export const aiService = {

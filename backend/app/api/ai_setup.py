@@ -34,6 +34,7 @@ import os
 from app.models.ai_config import AIModelType
 from app.core.model_catalog import is_known_provider, list_providers
 from app.services import platform_ai
+from app.core.security import encrypt_api_key
 
 # Try to import enterprise modules
 try:
@@ -336,6 +337,10 @@ async def get_voice_config(
         enabled=bool(voice.get("enabled", False)),
         model_name=voice.get("model_name", "gemini-3.8-live"),
         voice_name=voice.get("voice_name", "Aoede"),
+        has_api_key=bool(
+            voice.get("encrypted_api_key")
+            or (ai_config.model_type == AIModelType.GOOGLE and ai_config.encrypted_api_key)
+        ),
     )
 
 
@@ -349,22 +354,42 @@ async def update_voice_config(
     ai_config = ai_config_repo.get_active_config(current_user.organization_id)
     if not ai_config:
         raise HTTPException(status_code=404, detail="No active AI configuration found")
-    if ai_config.model_type != AIModelType.GOOGLE:
-        raise HTTPException(
-            status_code=400,
-            detail="Google Gemini must be the active AI provider before enabling web voice calls",
-        )
     if not voice_data.model_name.strip().startswith("gemini-"):
         raise HTTPException(status_code=400, detail="Enter a valid Gemini Live model ID")
 
     settings_data = dict(ai_config.settings or {})
+    existing_voice = dict(settings_data.get("voice", {}))
+    encrypted_voice_key = existing_voice.get("encrypted_api_key")
+    if voice_data.api_key is not None:
+        raw_voice_key = voice_data.api_key.get_secret_value().strip()
+        if raw_voice_key:
+            encrypted_voice_key = encrypt_api_key(raw_voice_key)
+
+    # Backwards compatibility: an organization that previously used Gemini for
+    # text already supplied a Google key. Copy it into the voice settings once,
+    # so later changing the text provider does not break voice calls.
+    if not encrypted_voice_key and ai_config.model_type == AIModelType.GOOGLE:
+        encrypted_voice_key = ai_config.encrypted_api_key
+
+    if voice_data.enabled and not encrypted_voice_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Enter a Google Gemini API key before enabling web voice calls",
+        )
+
     settings_data["voice"] = {
         "enabled": voice_data.enabled,
         "model_name": voice_data.model_name.strip(),
         "voice_name": voice_data.voice_name.strip() or "Aoede",
+        "encrypted_api_key": encrypted_voice_key,
     }
     ai_config_repo.update_config(ai_config.id, settings=settings_data)
-    return VoiceConfigResponse(**settings_data["voice"])
+    return VoiceConfigResponse(
+        enabled=voice_data.enabled,
+        model_name=voice_data.model_name.strip(),
+        voice_name=voice_data.voice_name.strip() or "Aoede",
+        has_api_key=bool(encrypted_voice_key),
+    )
 
 
 @router.put("/config", response_model=AISetupResponse)

@@ -518,10 +518,16 @@ async def widget_voice_call(websocket: WebSocket, widget_id: str):
         agent = AgentRepository(db).get_by_id(widget.agent_id)
         ai_config = AIConfigRepository(db).get_active_config(widget.organization_id)
         voice = (ai_config.settings or {}).get("voice", {}) if ai_config else {}
-        if not agent or not ai_config or ai_config.model_type != AIModelType.GOOGLE or not voice.get("enabled"):
+        if not agent or not ai_config or not voice.get("enabled"):
             await websocket.close(code=4403, reason="Voice calling is not enabled")
             return
-        api_key = decrypt_api_key(ai_config.encrypted_api_key)
+        encrypted_voice_key = voice.get("encrypted_api_key")
+        if not encrypted_voice_key and ai_config.model_type == AIModelType.GOOGLE:
+            encrypted_voice_key = ai_config.encrypted_api_key
+        if not encrypted_voice_key:
+            await websocket.close(code=4403, reason="Voice API key is not configured")
+            return
+        api_key = decrypt_api_key(encrypted_voice_key)
         model_name = voice.get("model_name", "gemini-3.8-live")
         voice_name = voice.get("voice_name", "Aoede")
         agent_id = str(agent.id)

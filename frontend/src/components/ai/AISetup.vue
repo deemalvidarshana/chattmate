@@ -73,7 +73,7 @@ const {
 
 // Set initial tab based on enterprise availability
 const activeTab = ref(hasEnterpriseModule ? 'chattermate' : 'custom')
-const voiceConfig = ref({ enabled: false, model_name: 'gemini-3.8-live', voice_name: 'Aoede' })
+const voiceConfig = ref({ enabled: false, model_name: 'gemini-3.8-live', voice_name: 'Aoede', api_key: '', has_api_key: false })
 const voiceSaving = ref(false)
 const voiceMessage = ref('')
 
@@ -299,7 +299,14 @@ const handleUpgrade = () => {
 // Ensure plans are available when component mounts
 onMounted(async () => {
   try {
-    voiceConfig.value = await aiService.getVoiceConfig()
+    const savedVoice = await aiService.getVoiceConfig()
+    voiceConfig.value = {
+      enabled: savedVoice.enabled,
+      model_name: savedVoice.model_name,
+      voice_name: savedVoice.voice_name,
+      api_key: '',
+      has_api_key: savedVoice.has_api_key ?? false,
+    }
   } catch (err) {
     console.debug('Voice configuration is not available yet', err)
   }
@@ -324,7 +331,8 @@ const saveVoiceConfig = async () => {
   voiceSaving.value = true
   voiceMessage.value = ''
   try {
-    voiceConfig.value = await aiService.updateVoiceConfig(voiceConfig.value)
+    const saved = await aiService.updateVoiceConfig(voiceConfig.value)
+    voiceConfig.value = { ...saved, api_key: '', has_api_key: saved.has_api_key ?? false }
     voiceMessage.value = 'Web voice calling configuration saved.'
   } catch (err: any) {
     voiceMessage.value = err?.response?.data?.detail || 'Could not save voice calling configuration.'
@@ -704,7 +712,23 @@ const chatterMateButtonText = computed(() => {
 
               <div class="voice-provider-card">
                 <span class="provider-radio"><span class="provider-radio-dot"></span></span>
-                <div><strong>Google Gemini</strong><small>Uses your saved Google API key — it is never sent to the browser.</small></div>
+                <div><strong>Google Gemini</strong><small>Voice uses its own Gemini API key, independently from your text model provider.</small></div>
+              </div>
+
+              <div class="form-group">
+                <label for="voiceApiKey">Gemini API key</label>
+                <input
+                  id="voiceApiKey"
+                  v-model="voiceConfig.api_key"
+                  type="password"
+                  class="form-control form-control-mono"
+                  :required="voiceConfig.enabled && !voiceConfig.has_api_key"
+                  :placeholder="voiceConfig.has_api_key ? 'Saved securely — enter a new key to replace it' : 'Enter your Google Gemini API key'"
+                />
+                <p class="key-hint">
+                  Stored encrypted and used only by the server for voice calls. Your existing OpenAI or other text model stays unchanged.
+                  &nbsp;&nbsp;<a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" class="key-help-link">Get a Google Gemini API key ↗</a>
+                </p>
               </div>
 
               <div class="form-group">
