@@ -52,3 +52,16 @@ class AIConfigResponse(BaseModel):
 class AISetupResponse(BaseModel):
     message: str
     config: AIConfigResponse
+
+
+class VoiceConfigUpdate(BaseModel):
+    enabled: bool = True
+    model_name: str = "gemini-3.8-live"
+    voice_name: str = "Aoede"
+
+
+class VoiceConfigResponse(BaseModel):
+    enabled: bool = False
+    model_name: str = "gemini-3.8-live"
+    voice_name: str = "Aoede"
+    provider: str = "GOOGLE"

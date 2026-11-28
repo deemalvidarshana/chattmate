@@ -297,6 +297,16 @@ const hasToken = computed(() => !!token.value)
 const authError = ref<string | null>(null)
 const showAuthError = ref(false)
 const isApiKeyAuthRequired = ref(false) // Specific error for missing API key configuration
+const voiceEnabled = ref(false)
+const voiceCallActive = ref(false)
+const voiceCallStatus = ref('Ready to talk')
+const voiceTranscript = ref('')
+let voiceSocket: WebSocket | null = null
+let voiceStream: MediaStream | null = null
+let voiceAudioContext: AudioContext | null = null
+let voiceProcessor: ScriptProcessorNode | null = null
+let voiceSource: MediaStreamAudioSourceNode | null = null
+let playbackCursor = 0
 
 // Check if there's an initial auth error from widget.ts
 if (props.initialAuthError) {
@@ -458,6 +468,117 @@ const minimizeWidget = () => {
     window.parent.postMessage({ type: 'WIDGET_MINIMIZE' }, '*')
 }
 
+const downsamplePcm16 = (input: Float32Array, sourceRate: number, targetRate = 16000) => {
+    const ratio = sourceRate / targetRate
+    const output = new Int16Array(Math.max(1, Math.floor(input.length / ratio)))
+    for (let i = 0; i < output.length; i++) {
+        const start = Math.floor(i * ratio)
+        const end = Math.min(input.length, Math.floor((i + 1) * ratio))
+        let sum = 0
+        for (let j = start; j < end; j++) sum += input[j]
+        const sample = Math.max(-1, Math.min(1, sum / Math.max(1, end - start)))
+        output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
+    }
+    return output.buffer
+}
+
+const playVoiceAudio = async (buffer: ArrayBuffer) => {
+    if (!voiceAudioContext) return
+    const pcm = new Int16Array(buffer)
+    const audio = voiceAudioContext.createBuffer(1, pcm.length, 24000)
+    const channel = audio.getChannelData(0)
+    for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768
+    const source = voiceAudioContext.createBufferSource()
+    source.buffer = audio
+    source.connect(voiceAudioContext.destination)
+    playbackCursor = Math.max(playbackCursor, voiceAudioContext.currentTime)
+    source.start(playbackCursor)
+    playbackCursor += audio.duration
+}
+
+const endVoiceCall = () => {
+    if (voiceSocket?.readyState === WebSocket.OPEN) {
+        voiceSocket.send(JSON.stringify({ type: 'audio_stream_end' }))
+        voiceSocket.close(1000, 'Call ended')
+    }
+    voiceProcessor?.disconnect()
+    voiceSource?.disconnect()
+    voiceStream?.getTracks().forEach((track) => track.stop())
+    voiceAudioContext?.close()
+    voiceSocket = null
+    voiceProcessor = null
+    voiceSource = null
+    voiceStream = null
+    voiceAudioContext = null
+    playbackCursor = 0
+    voiceCallActive.value = false
+    voiceCallStatus.value = 'Ready to talk'
+}
+
+const startVoiceCall = async () => {
+    if (voiceCallActive.value) {
+        endVoiceCall()
+        return
+    }
+    if (!widgetId.value || !token.value) {
+        voiceCallStatus.value = 'Open the chat first, then try again.'
+        return
+    }
+    try {
+        voiceCallStatus.value = 'Requesting microphone…'
+        voiceStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
+        voiceAudioContext = new AudioContext()
+        await voiceAudioContext.resume()
+        playbackCursor = voiceAudioContext.currentTime
+
+        const wsBase = widgetEnv.WS_URL.replace(/^http/, 'ws').replace(/\/$/, '')
+        voiceSocket = new WebSocket(`${wsBase}/api/v1/widgets/${widgetId.value}/voice`)
+        voiceSocket.binaryType = 'arraybuffer'
+        voiceSocket.onmessage = async (event) => {
+            if (event.data instanceof ArrayBuffer) {
+                await playVoiceAudio(event.data)
+                return
+            }
+            const data = JSON.parse(event.data)
+            if (data.type === 'ready') voiceCallStatus.value = 'Listening…'
+            if (data.type === 'transcript') {
+                voiceTranscript.value = data.text
+                voiceCallStatus.value = data.role === 'assistant' ? 'Speaking…' : 'Thinking…'
+            }
+            if (data.type === 'interrupted') {
+                playbackCursor = voiceAudioContext?.currentTime || 0
+                voiceCallStatus.value = 'Listening…'
+            }
+            if (data.type === 'error') voiceCallStatus.value = data.message
+        }
+        voiceSocket.onclose = () => {
+            if (voiceStream || voiceAudioContext) endVoiceCall()
+        }
+        await new Promise<void>((resolve, reject) => {
+            voiceSocket!.onopen = () => {
+                voiceSocket!.send(JSON.stringify({ type: 'auth', token: token.value }))
+                resolve()
+            }
+            voiceSocket!.onerror = () => reject(new Error('Voice connection failed'))
+        })
+
+        voiceSource = voiceAudioContext.createMediaStreamSource(voiceStream)
+        voiceProcessor = voiceAudioContext.createScriptProcessor(4096, 1, 1)
+        voiceProcessor.onaudioprocess = (event) => {
+            if (voiceSocket?.readyState !== WebSocket.OPEN || !voiceAudioContext) return
+            voiceSocket.send(downsamplePcm16(event.inputBuffer.getChannelData(0), voiceAudioContext.sampleRate))
+        }
+        voiceSource.connect(voiceProcessor)
+        voiceProcessor.connect(voiceAudioContext.destination)
+        voiceCallActive.value = true
+        voiceCallStatus.value = 'Listening…'
+    } catch (error) {
+        console.error('Unable to start voice call', error)
+        endVoiceCall()
+        voiceCallStatus.value = 'Microphone or voice connection unavailable.'
+    }
+}
+
 // Handle enter key
 const handleKeyPress = (event: KeyboardEvent) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -577,6 +698,7 @@ const checkAuthorization = async () => {
         if (data.agent?.allow_attachments !== undefined) {
             allowAttachments.value = data.agent.allow_attachments
         }
+        voiceEnabled.value = Boolean(data.agent?.voice_enabled)
 
         // Update workflow status in initial data if received from backend
         if (data.agent?.workflow !== undefined) {
@@ -1428,6 +1550,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+    endVoiceCall()
     window.removeEventListener('message', (event) => {
         if (event.data.type === 'SCROLL_TO_BOTTOM') {
             scrollToBottom()
@@ -2147,6 +2270,20 @@ const askAiHotkey = computed(() => parentDisplay.value?.hotkey !== false)
                      two actions would drift to opposite ends of the free space. -->
                 <div class="header-actions">
                 <button
+                    v-if="voiceEnabled"
+                    type="button"
+                    class="header-call"
+                    :class="{ active: voiceCallActive }"
+                    :style="messageNameStyles"
+                    :title="voiceCallActive ? 'End voice call' : 'Start voice call'"
+                    :aria-label="voiceCallActive ? 'End voice call' : 'Start voice call'"
+                    @click="startVoiceCall"
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.62 2.63a2 2 0 0 1-.45 2.11L8 9.73a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.85.29 1.73.5 2.63.62A2 2 0 0 1 22 16.92z"></path>
+                    </svg>
+                </button>
+                <button
                     v-if="canStartNewChat"
                     type="button"
                     class="header-new-chat"
@@ -2178,7 +2315,15 @@ const askAiHotkey = computed(() => parentDisplay.value?.hotkey !== false)
                 </button>
                 </div>
             </div>
-            <div v-else class="ask-anything-top" :style="headerBorderStyles">
+            <div v-if="voiceCallActive" class="voice-call-strip" :style="messageNameStyles">
+                <span class="voice-pulse"></span>
+                <div>
+                    <strong>{{ voiceCallStatus }}</strong>
+                    <small v-if="voiceTranscript">{{ voiceTranscript }}</small>
+                </div>
+                <button type="button" @click="endVoiceCall" aria-label="End voice call">End</button>
+            </div>
+            <div v-if="isAskAnythingStyle" class="ask-anything-top" :style="headerBorderStyles">
                 <div class="ask-anything-header">
                     <img
                         v-if="humanAgentPhotoUrl || photoUrl"
@@ -2999,6 +3144,37 @@ const askAiHotkey = computed(() => parentDisplay.value?.hotkey !== false)
 .header-minimize:hover {
     background: rgba(127, 127, 127, 0.22);
 }
+
+.header-call {
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    border: none;
+    background: rgba(127, 127, 127, 0.12);
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.header-call:hover { background: rgba(127, 127, 127, 0.22); }
+.header-call.active { background: #ef4444; color: #fff !important; }
+
+.voice-call-strip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(127, 127, 127, 0.14);
+    background: rgba(127, 127, 127, 0.07);
+}
+.voice-call-strip > div { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.voice-call-strip strong { font-size: 12px; }
+.voice-call-strip small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .7; }
+.voice-call-strip button { border: 0; border-radius: 999px; padding: 5px 10px; background: #ef4444; color: white; cursor: pointer; }
+.voice-pulse { width: 9px; height: 9px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 0 rgba(34,197,94,.4); animation: voice-pulse 1.4s infinite; }
+@keyframes voice-pulse { 70% { box-shadow: 0 0 0 7px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
 
 /* Header Menu Styles */
 /* Matches the minimize chevron exactly — two header actions should read as one

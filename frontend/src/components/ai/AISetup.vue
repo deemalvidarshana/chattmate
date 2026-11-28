@@ -19,6 +19,7 @@ import { useAISetup } from '@/composables/useAISetup'
 import { computed, ref, watch, onMounted } from 'vue'
 import { useEnterpriseFeatures } from '@/composables/useEnterpriseFeatures'
 import { useSubscriptionStorage } from '@/utils/storage'
+import { aiService } from '@/services/ai'
 
 const emit = defineEmits<{
   (e: 'ai-setup-complete'): void
@@ -72,9 +73,13 @@ const {
 
 // Set initial tab based on enterprise availability
 const activeTab = ref(hasEnterpriseModule ? 'chattermate' : 'custom')
+const voiceConfig = ref({ enabled: false, model_name: 'gemini-3.8-live', voice_name: 'Aoede' })
+const voiceSaving = ref(false)
+const voiceMessage = ref('')
 
 // Watch for existing configuration changes to set the correct tab
 watch([hasExistingConfig, setupConfig], ([hasConfig, config]) => {
+  if (activeTab.value === 'voice') return
   if (hasConfig && config.provider) {
     // If existing config is Growmiq mini, show Growmiq mini tab
     if (config.provider.toLowerCase() === 'chattermate' && hasEnterpriseModule) {
@@ -280,7 +285,7 @@ watch(() => setupConfig.value.provider, () => {
   useCustomModel.value = false
 })
 
-const selectTab = (tab: 'chattermate' | 'custom') => {
+const selectTab = (tab: 'chattermate' | 'custom' | 'voice') => {
   if (tab === 'chattermate' && !hasEnterpriseModule) return
   // Allow clicking on custom tab even when locked to show upgrade option
   activeTab.value = tab
@@ -293,6 +298,11 @@ const handleUpgrade = () => {
 
 // Ensure plans are available when component mounts
 onMounted(async () => {
+  try {
+    voiceConfig.value = await aiService.getVoiceConfig()
+  } catch (err) {
+    console.debug('Voice configuration is not available yet', err)
+  }
   if (hasEnterpriseModule && subscriptionStorage.getAvailablePlans().length === 0) {
     try {
       // Initialize the subscription store first
@@ -309,6 +319,19 @@ onMounted(async () => {
     }
   }
 })
+
+const saveVoiceConfig = async () => {
+  voiceSaving.value = true
+  voiceMessage.value = ''
+  try {
+    voiceConfig.value = await aiService.updateVoiceConfig(voiceConfig.value)
+    voiceMessage.value = 'Web voice calling configuration saved.'
+  } catch (err: any) {
+    voiceMessage.value = err?.response?.data?.detail || 'Could not save voice calling configuration.'
+  } finally {
+    voiceSaving.value = false
+  }
+}
 
 const handleSubmit = async () => {
   try {
@@ -414,6 +437,18 @@ const chatterMateButtonText = computed(() => {
                 <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
               </svg>
             </span>
+          </div>
+          <div
+            class="tab"
+            :class="{ active: activeTab === 'voice' }"
+            @click="selectTab('voice')"
+          >
+            <span class="tab-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.78.62 2.63a2 2 0 0 1-.45 2.11L8 9.73a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.85.29 1.73.5 2.63.62A2 2 0 0 1 22 16.92z"></path>
+              </svg>
+            </span>
+            <span class="tab-label">Web Voice</span>
           </div>
         </div>
 
@@ -659,6 +694,49 @@ const chatterMateButtonText = computed(() => {
               </form>
             </div>
           </div>
+
+          <div v-if="activeTab === 'voice'" class="custom-content">
+            <form @submit.prevent="saveVoiceConfig" class="setup-form">
+              <h4 class="setup-title">Google Gemini Live voice</h4>
+              <p class="setup-description">
+                Add a secure call button to the existing web chat widget. Calls use the same agent instructions and connected knowledge base.
+              </p>
+
+              <div class="voice-provider-card">
+                <span class="provider-radio"><span class="provider-radio-dot"></span></span>
+                <div><strong>Google Gemini</strong><small>Uses your saved Google API key — it is never sent to the browser.</small></div>
+              </div>
+
+              <div class="form-group">
+                <label for="voiceModel">Live model</label>
+                <select id="voiceModel" v-model="voiceConfig.model_name" class="form-control" required>
+                  <option value="gemini-3.8-live">Gemini 3.8 Live</option>
+                  <option value="gemini-3.8-live-extended-thinking">Gemini 3.8 Live — Extended Thinking</option>
+                  <option value="gemini-3.1-flash-live-preview">Gemini 3.1 Flash Live Preview</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="voiceName">Voice</label>
+                <select id="voiceName" v-model="voiceConfig.voice_name" class="form-control">
+                  <option value="Aoede">Aoede</option>
+                  <option value="Kore">Kore</option>
+                  <option value="Puck">Puck</option>
+                  <option value="Zephyr">Zephyr</option>
+                </select>
+              </div>
+
+              <label class="voice-toggle-row">
+                <span><strong>Show call button</strong><small>Displays the phone icon in the existing web widget header.</small></span>
+                <input v-model="voiceConfig.enabled" type="checkbox" />
+              </label>
+
+              <p v-if="voiceMessage" class="key-hint">{{ voiceMessage }}</p>
+              <button type="submit" class="btn btn-primary" :disabled="voiceSaving">
+                {{ voiceSaving ? 'Saving...' : 'Save Voice Configuration' }}
+              </button>
+            </form>
+          </div>
         </div>
       </div>
     </div>
@@ -794,6 +872,25 @@ const chatterMateButtonText = computed(() => {
 .setup-form {
   max-width: 520px;
 }
+
+.voice-provider-card,
+.voice-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 16px;
+  margin-bottom: 22px;
+  background: var(--accent-bg-08);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-input);
+}
+
+.voice-provider-card div,
+.voice-toggle-row span { display: flex; flex-direction: column; gap: 3px; }
+.voice-provider-card small,
+.voice-toggle-row small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.voice-toggle-row { justify-content: space-between; cursor: pointer; }
+.voice-toggle-row input { width: 18px; height: 18px; accent-color: var(--accent-solid); }
 
 .setup-title {
   font-family: var(--font-display);

@@ -24,7 +24,10 @@ from app.models.user import User
 from app.core.auth import get_current_user, require_permissions
 from app.repositories.ai_config import AIConfigRepository
 from app.agents.chat_agent import ChatAgent
-from app.models.schemas.ai_config import AIConfigCreate, AIConfigResponse, AISetupResponse, AIConfigUpdate
+from app.models.schemas.ai_config import (
+    AIConfigCreate, AIConfigResponse, AISetupResponse, AIConfigUpdate,
+    VoiceConfigResponse, VoiceConfigUpdate,
+)
 from sqlalchemy.orm import Session
 import os
 
@@ -318,6 +321,50 @@ async def get_organization_ai_config(
             status_code=500,
             detail="Failed to get AI configuration"
         )
+
+
+@router.get("/voice-config", response_model=VoiceConfigResponse)
+async def get_voice_config(
+    current_user: User = Depends(require_permissions("view_ai_config")),
+    db: Session = Depends(get_db),
+):
+    ai_config = AIConfigRepository(db).get_active_config(current_user.organization_id)
+    if not ai_config:
+        raise HTTPException(status_code=404, detail="No active AI configuration found")
+    voice = (ai_config.settings or {}).get("voice", {})
+    return VoiceConfigResponse(
+        enabled=bool(voice.get("enabled", False)),
+        model_name=voice.get("model_name", "gemini-3.8-live"),
+        voice_name=voice.get("voice_name", "Aoede"),
+    )
+
+
+@router.put("/voice-config", response_model=VoiceConfigResponse)
+async def update_voice_config(
+    voice_data: VoiceConfigUpdate,
+    current_user: User = Depends(require_permissions("manage_ai_config")),
+    db: Session = Depends(get_db),
+):
+    ai_config_repo = AIConfigRepository(db)
+    ai_config = ai_config_repo.get_active_config(current_user.organization_id)
+    if not ai_config:
+        raise HTTPException(status_code=404, detail="No active AI configuration found")
+    if ai_config.model_type != AIModelType.GOOGLE:
+        raise HTTPException(
+            status_code=400,
+            detail="Google Gemini must be the active AI provider before enabling web voice calls",
+        )
+    if not voice_data.model_name.strip().startswith("gemini-"):
+        raise HTTPException(status_code=400, detail="Enter a valid Gemini Live model ID")
+
+    settings_data = dict(ai_config.settings or {})
+    settings_data["voice"] = {
+        "enabled": voice_data.enabled,
+        "model_name": voice_data.model_name.strip(),
+        "voice_name": voice_data.voice_name.strip() or "Aoede",
+    }
+    ai_config_repo.update_config(ai_config.id, settings=settings_data)
+    return VoiceConfigResponse(**settings_data["voice"])
 
 
 @router.put("/config", response_model=AISetupResponse)

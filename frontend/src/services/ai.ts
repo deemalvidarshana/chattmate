@@ -23,6 +23,13 @@ export interface AIConfig {
   api_key: string;
 }
 
+export interface VoiceConfig {
+  enabled: boolean
+  model_name: string
+  voice_name: string
+  provider?: string
+}
+
 export const aiService = {
   async getProviders(): Promise<AIProvider[]> {
     const response = await api.get('/ai/providers')
@@ -40,5 +47,15 @@ export const aiService = {
   
   async updateAI(config: AIConfig): Promise<void> {
     await api.put('/ai/config', config)
+  },
+
+  async getVoiceConfig(): Promise<VoiceConfig> {
+    const response = await api.get('/ai/voice-config')
+    return response.data
+  },
+
+  async updateVoiceConfig(config: VoiceConfig): Promise<VoiceConfig> {
+    const response = await api.put('/ai/voice-config', config)
+    return response.data
   },
 }

@@ -68,6 +68,8 @@ class AgentResponse(BaseModel):
     display_name: Optional[str] = None
     customization: Optional[AgentCustomizationResponse] = None
     workflow: bool = False
+    allow_attachments: bool = False
+    voice_enabled: bool = False
 
 
 class HumanAgentResponse(BaseModel):

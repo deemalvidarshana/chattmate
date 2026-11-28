@@ -50,6 +50,7 @@ pypdf
 pgvector
 
 google-generativeai
+google-genai
 google-cloud-aiplatform
 ollama
 anthropic

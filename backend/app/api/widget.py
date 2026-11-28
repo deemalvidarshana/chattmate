@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Response, Header, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Response, Header, Query, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 import json
 import time
+import asyncio
 
 from app.models.widget import Widget
 from app.models.user import User
@@ -42,6 +43,12 @@ from app.core.s3 import get_s3_signed_url
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+def _voice_enabled(db: Session, organization_id) -> bool:
+    from app.repositories.ai_config import AIConfigRepository
+    ai_config = AIConfigRepository(db).get_active_config(organization_id)
+    return bool(ai_config and (ai_config.settings or {}).get("voice", {}).get("enabled"))
 
 
 _ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets"
@@ -402,7 +409,8 @@ async def get_widget_data(
                 "display_name": agent.display_name,
                 "customization": customization,
                 "workflow": bool(agent.use_workflow and agent.active_workflow_id),
-                "allow_attachments": agent.allow_attachments
+                "allow_attachments": agent.allow_attachments,
+                "voice_enabled": _voice_enabled(db, widget.organization_id)
             },
             "token": new_token
         }
@@ -438,7 +446,8 @@ async def get_widget_data(
                     "display_name": agent.display_name,
                     "customization": customization,
                     "workflow": bool(agent.use_workflow and agent.active_workflow_id),
-                    "allow_attachments": agent.allow_attachments
+                    "allow_attachments": agent.allow_attachments,
+                    "voice_enabled": _voice_enabled(db, widget.organization_id)
                 },
                 "token": new_token
             }
@@ -469,9 +478,144 @@ async def get_widget_data(
             "display_name": agent.display_name,
             "customization": customization,
             "workflow": bool(agent.use_workflow and agent.active_workflow_id),
-            "allow_attachments": agent.allow_attachments
+            "allow_attachments": agent.allow_attachments,
+            "voice_enabled": _voice_enabled(db, widget.organization_id)
         }
     }
+
+
+@router.websocket("/{widget_id}/voice")
+async def widget_voice_call(websocket: WebSocket, widget_id: str):
+    """Secure Gemini Live relay for the web widget.
+
+    The tenant key never reaches the browser. Browser audio is PCM16/16 kHz;
+    Gemini returns PCM16/24 kHz. Knowledge lookup remains server-side and is
+    exposed to the Live model as a single, tightly scoped function.
+    """
+    await websocket.accept()
+    try:
+        auth_message = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+    except Exception:
+        await websocket.close(code=4401, reason="Voice authentication required")
+        return
+    token = auth_message.get("token", "") if auth_message.get("type") == "auth" else ""
+    token_data = verify_conversation_token(token) if token else None
+    if not token_data or token_data.get("widget_id") != widget_id:
+        await websocket.close(code=4401, reason="Invalid conversation token")
+        return
+
+    from app.database import SessionLocal
+    from app.repositories.ai_config import AIConfigRepository
+    from app.core.security import decrypt_api_key
+    from app.tools.knowledge_search_byagent import KnowledgeSearchByAgent
+    from app.models.ai_config import AIModelType
+
+    with SessionLocal() as db:
+        widget = db.query(Widget).filter(Widget.id == widget_id).first()
+        if not widget:
+            await websocket.close(code=4404, reason="Widget not found")
+            return
+        agent = AgentRepository(db).get_by_id(widget.agent_id)
+        ai_config = AIConfigRepository(db).get_active_config(widget.organization_id)
+        voice = (ai_config.settings or {}).get("voice", {}) if ai_config else {}
+        if not agent or not ai_config or ai_config.model_type != AIModelType.GOOGLE or not voice.get("enabled"):
+            await websocket.close(code=4403, reason="Voice calling is not enabled")
+            return
+        api_key = decrypt_api_key(ai_config.encrypted_api_key)
+        model_name = voice.get("model_name", "gemini-3.8-live")
+        voice_name = voice.get("voice_name", "Aoede")
+        agent_id = str(agent.id)
+        org_id = agent.organization_id
+        instructions = "\n".join(agent.instructions or [])
+
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        await websocket.send_json({"type": "error", "message": "Voice runtime is not installed"})
+        await websocket.close(code=1011)
+        return
+
+    knowledge = KnowledgeSearchByAgent(agent_id=agent_id, org_id=org_id)
+    system_text = (
+        f"{instructions}\n\n"
+        "You are speaking with a customer in a live voice call. Keep answers natural and concise. "
+        "For any question about this business, its products, services, policies, or support, call "
+        "search_knowledge_base before answering. Do not invent business facts."
+    )
+    live_config = {
+        "response_modalities": ["AUDIO"],
+        "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": voice_name}}},
+        "system_instruction": {"parts": [{"text": system_text}]},
+        "input_audio_transcription": {},
+        "output_audio_transcription": {},
+        "tools": [{"function_declarations": [{
+            "name": "search_knowledge_base",
+            "description": "Search the agent's connected knowledge base for accurate business information.",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {"query": {"type": "STRING", "description": "The customer's question"}},
+                "required": ["query"],
+            },
+        }]}],
+    }
+
+    client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
+    try:
+        async with client.aio.live.connect(model=model_name, config=live_config) as session:
+            await websocket.send_json({"type": "ready"})
+
+            async def browser_to_gemini():
+                while True:
+                    message = await websocket.receive()
+                    if message.get("bytes") is not None:
+                        await session.send_realtime_input(
+                            audio=types.Blob(data=message["bytes"], mime_type="audio/pcm;rate=16000")
+                        )
+                    elif message.get("text"):
+                        data = json.loads(message["text"])
+                        if data.get("type") == "audio_stream_end":
+                            await session.send_realtime_input(audio_stream_end=True)
+
+            async def gemini_to_browser():
+                while True:
+                    async for response in session.receive():
+                        if response.tool_call and response.tool_call.function_calls:
+                            tool_responses = []
+                            for call in response.tool_call.function_calls:
+                                query = (call.args or {}).get("query", "")
+                                result = await asyncio.to_thread(knowledge.search_knowledge_base, query)
+                                tool_responses.append(types.FunctionResponse(
+                                    name=call.name,
+                                    id=call.id,
+                                    response={"result": result},
+                                ))
+                            await session.send_tool_response(function_responses=tool_responses)
+                            continue
+                        content = response.server_content
+                        if not content:
+                            continue
+                        if content.interrupted:
+                            await websocket.send_json({"type": "interrupted"})
+                        if content.input_transcription and content.input_transcription.text:
+                            await websocket.send_json({"type": "transcript", "role": "user", "text": content.input_transcription.text})
+                        if content.output_transcription and content.output_transcription.text:
+                            await websocket.send_json({"type": "transcript", "role": "assistant", "text": content.output_transcription.text})
+                        if content.model_turn:
+                            for part in content.model_turn.parts or []:
+                                if part.inline_data and part.inline_data.data:
+                                    await websocket.send_bytes(part.inline_data.data)
+
+            await asyncio.gather(browser_to_gemini(), gemini_to_browser())
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.exception("Widget voice call failed: %s", exc)
+        try:
+            await websocket.send_json({"type": "error", "message": "Voice call ended unexpectedly"})
+            await websocket.close(code=1011)
+        except Exception:
+            pass
 
 
 @router.post("/{widget_id}/end-chat")
