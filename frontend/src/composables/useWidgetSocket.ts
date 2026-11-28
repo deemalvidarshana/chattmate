@@ -608,6 +608,28 @@ export function useWidgetSocket() {
         onWorkflowProceededCallback = null
     }
 
+    // Voice calls reuse the widget's existing Socket.IO connection.  The
+    // production reverse proxy already upgrades /socket.io reliably, while a
+    // second raw WebSocket endpoint is easy for a host proxy to route as plain
+    // HTTP (and then return 404). Keeping chat and voice on one authenticated
+    // socket also avoids sending the conversation token twice.
+    const startVoice = (handlers: Record<string, (...args: any[]) => void>) => {
+        if (!socket?.connected) throw new Error('Chat connection is not ready')
+        Object.entries(handlers).forEach(([event, handler]) => socket?.on(event, handler))
+        socket.emit('voice_start')
+    }
+
+    const sendVoiceAudio = (audio: ArrayBuffer) => {
+        if (socket?.connected) socket.emit('voice_audio', audio)
+    }
+
+    const stopVoice = (handlers?: Record<string, (...args: any[]) => void>) => {
+        if (socket?.connected) socket.emit('voice_end')
+        if (handlers) {
+            Object.entries(handlers).forEach(([event, handler]) => socket?.off(event, handler))
+        }
+    }
+
     return {
         messages,
         loading,
@@ -633,6 +655,9 @@ export function useWidgetSocket() {
         onWorkflowProceeded,
         currentSessionId,
         setToken,
-        setWidgetId
+        setWidgetId,
+        startVoice,
+        sendVoiceAudio,
+        stopVoice
     }
 }

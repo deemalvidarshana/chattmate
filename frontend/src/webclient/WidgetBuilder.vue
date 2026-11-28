@@ -82,7 +82,10 @@ const {
     onWorkflowProceeded,
     currentSessionId,
     setToken,
-    setWidgetId
+    setWidgetId,
+    startVoice,
+    sendVoiceAudio,
+    stopVoice
 } = useWidgetSocket()
 
 // Client-side typewriter reveal for live agent/bot replies; keep the view pinned
@@ -301,7 +304,6 @@ const voiceEnabled = ref(false)
 const voiceCallActive = ref(false)
 const voiceCallStatus = ref('Ready to talk')
 const voiceTranscript = ref('')
-let voiceSocket: WebSocket | null = null
 let voiceStream: MediaStream | null = null
 let voiceAudioContext: AudioContext | null = null
 let voiceProcessor: ScriptProcessorNode | null = null
@@ -497,15 +499,11 @@ const playVoiceAudio = async (buffer: ArrayBuffer) => {
 }
 
 const endVoiceCall = () => {
-    if (voiceSocket?.readyState === WebSocket.OPEN) {
-        voiceSocket.send(JSON.stringify({ type: 'audio_stream_end' }))
-        voiceSocket.close(1000, 'Call ended')
-    }
+    stopVoice(voiceHandlers)
     voiceProcessor?.disconnect()
     voiceSource?.disconnect()
     voiceStream?.getTracks().forEach((track) => track.stop())
     voiceAudioContext?.close()
-    voiceSocket = null
     voiceProcessor = null
     voiceSource = null
     voiceStream = null
@@ -513,6 +511,30 @@ const endVoiceCall = () => {
     playbackCursor = 0
     voiceCallActive.value = false
     voiceCallStatus.value = 'Ready to talk'
+}
+
+const voiceHandlers = {
+    voice_ready: () => { voiceCallStatus.value = 'Listening…' },
+    voice_transcript: (data: any) => {
+        voiceTranscript.value = data?.text || ''
+        voiceCallStatus.value = data?.role === 'assistant' ? 'Speaking…' : 'Thinking…'
+    },
+    voice_interrupted: () => {
+        playbackCursor = voiceAudioContext?.currentTime || 0
+        voiceCallStatus.value = 'Listening…'
+    },
+    voice_audio: async (data: ArrayBuffer | Uint8Array) => {
+        const buffer = data instanceof ArrayBuffer
+            ? data
+            : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+        await playVoiceAudio(buffer)
+    },
+    voice_error: (data: any) => {
+        voiceCallStatus.value = data?.message || 'Voice call ended unexpectedly'
+    },
+    voice_ended: () => {
+        if (voiceStream || voiceAudioContext) endVoiceCall()
+    }
 }
 
 const startVoiceCall = async () => {
@@ -531,42 +553,13 @@ const startVoiceCall = async () => {
         await voiceAudioContext.resume()
         playbackCursor = voiceAudioContext.currentTime
 
-        const wsBase = widgetEnv.WS_URL.replace(/^http/, 'ws').replace(/\/$/, '')
-        voiceSocket = new WebSocket(`${wsBase}/api/v1/widgets/${widgetId.value}/voice`)
-        voiceSocket.binaryType = 'arraybuffer'
-        voiceSocket.onmessage = async (event) => {
-            if (event.data instanceof ArrayBuffer) {
-                await playVoiceAudio(event.data)
-                return
-            }
-            const data = JSON.parse(event.data)
-            if (data.type === 'ready') voiceCallStatus.value = 'Listening…'
-            if (data.type === 'transcript') {
-                voiceTranscript.value = data.text
-                voiceCallStatus.value = data.role === 'assistant' ? 'Speaking…' : 'Thinking…'
-            }
-            if (data.type === 'interrupted') {
-                playbackCursor = voiceAudioContext?.currentTime || 0
-                voiceCallStatus.value = 'Listening…'
-            }
-            if (data.type === 'error') voiceCallStatus.value = data.message
-        }
-        voiceSocket.onclose = () => {
-            if (voiceStream || voiceAudioContext) endVoiceCall()
-        }
-        await new Promise<void>((resolve, reject) => {
-            voiceSocket!.onopen = () => {
-                voiceSocket!.send(JSON.stringify({ type: 'auth', token: token.value }))
-                resolve()
-            }
-            voiceSocket!.onerror = () => reject(new Error('Voice connection failed'))
-        })
+        startVoice(voiceHandlers)
 
         voiceSource = voiceAudioContext.createMediaStreamSource(voiceStream)
         voiceProcessor = voiceAudioContext.createScriptProcessor(4096, 1, 1)
         voiceProcessor.onaudioprocess = (event) => {
-            if (voiceSocket?.readyState !== WebSocket.OPEN || !voiceAudioContext) return
-            voiceSocket.send(downsamplePcm16(event.inputBuffer.getChannelData(0), voiceAudioContext.sampleRate))
+            if (!voiceAudioContext) return
+            sendVoiceAudio(downsamplePcm16(event.inputBuffer.getChannelData(0), voiceAudioContext.sampleRate))
         }
         voiceSource.connect(voiceProcessor)
         voiceProcessor.connect(voiceAudioContext.destination)

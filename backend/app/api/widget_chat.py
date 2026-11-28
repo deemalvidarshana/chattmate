@@ -71,6 +71,176 @@ logger = get_logger(__name__)
 # to agents and copied onto the linked ticket's activity feed — bound it.
 MAX_RATING_FEEDBACK_LENGTH = 2000
 
+# Active voice relays keyed by the already-authenticated widget Socket.IO sid.
+# Audio intentionally shares the same transport as chat: the production proxy
+# already supports /socket.io upgrades, whereas a second raw WebSocket path can
+# be (and was) forwarded as ordinary HTTP and answered with a 404.
+_voice_calls: dict[str, dict] = {}
+
+
+async def _run_voice_call(sid: str, audio_queue: asyncio.Queue) -> None:
+    """Relay PCM audio between one widget Socket.IO client and Gemini Live."""
+    db = None
+    try:
+        socket_session = await sio.get_session(sid, namespace='/widget')
+        org_id = socket_session.get('org_id')
+        agent_id = socket_session.get('agent_id')
+        if not org_id or not agent_id:
+            raise ValueError('Widget voice session is not authenticated')
+
+        from google import genai
+        from google.genai import types
+        from app.core.security import decrypt_api_key
+        from app.tools.knowledge_search_byagent import KnowledgeSearchByAgent
+
+        db = next(get_db())
+        ai_config = AIConfigRepository(db).get_active_config(org_id)
+        agent = AgentRepository(db).get_by_id(agent_id)
+        voice = (ai_config.settings or {}).get('voice', {}) if ai_config else {}
+        display = ((agent.customization.customization_metadata or {}).get('widget_display', {})
+                   if agent and agent.customization else {})
+        if not agent or not ai_config or not voice.get('enabled') or display.get('show_call_button') is False:
+            raise ValueError('Voice calling is not enabled')
+
+        encrypted_key = voice.get('encrypted_api_key')
+        if not encrypted_key and ai_config.model_type == AIModelType.GOOGLE:
+            encrypted_key = ai_config.encrypted_api_key
+        if not encrypted_key:
+            raise ValueError('Voice API key is not configured')
+
+        api_key = decrypt_api_key(encrypted_key)
+        model_name = voice.get('model_name', 'gemini-3.8-live')
+        voice_name = voice.get('voice_name', 'Aoede')
+        instructions = '\n'.join(agent.instructions or [])
+        knowledge = KnowledgeSearchByAgent(agent_id=str(agent.id), org_id=agent.organization_id)
+        db.close()
+        db = None
+
+        system_text = (
+            f"{instructions}\n\n"
+            "You are speaking with a customer in a live voice call. Keep answers natural and concise. "
+            "For questions about this business, products, services, policies, or support, call "
+            "search_knowledge_base before answering. Do not invent business facts."
+        )
+        live_config = {
+            'response_modalities': ['AUDIO'],
+            'speech_config': {'voice_config': {'prebuilt_voice_config': {'voice_name': voice_name}}},
+            'system_instruction': {'parts': [{'text': system_text}]},
+            'input_audio_transcription': {},
+            'output_audio_transcription': {},
+            'tools': [{'function_declarations': [{
+                'name': 'search_knowledge_base',
+                'description': 'Search the connected knowledge base for accurate business information.',
+                'parameters': {
+                    'type': 'OBJECT',
+                    'properties': {'query': {'type': 'STRING'}},
+                    'required': ['query'],
+                },
+            }]}],
+        }
+        client = genai.Client(api_key=api_key, http_options={'api_version': 'v1beta'})
+        async with client.aio.live.connect(model=model_name, config=live_config) as gemini:
+            await sio.emit('voice_ready', to=sid, namespace='/widget')
+
+            async def browser_to_gemini():
+                while True:
+                    audio = await audio_queue.get()
+                    if audio is None:
+                        await gemini.send_realtime_input(audio_stream_end=True)
+                        return
+                    await gemini.send_realtime_input(
+                        audio=types.Blob(data=bytes(audio), mime_type='audio/pcm;rate=16000')
+                    )
+
+            async def gemini_to_browser():
+                while True:
+                    async for response in gemini.receive():
+                        if response.tool_call and response.tool_call.function_calls:
+                            replies = []
+                            for call in response.tool_call.function_calls:
+                                query = (call.args or {}).get('query', '')
+                                result = await asyncio.to_thread(knowledge.search_knowledge_base, query)
+                                replies.append(types.FunctionResponse(
+                                    name=call.name, id=call.id, response={'result': result}
+                                ))
+                            await gemini.send_tool_response(function_responses=replies)
+                            continue
+                        content = response.server_content
+                        if not content:
+                            continue
+                        if content.interrupted:
+                            await sio.emit('voice_interrupted', to=sid, namespace='/widget')
+                        if content.input_transcription and content.input_transcription.text:
+                            await sio.emit('voice_transcript', {
+                                'role': 'user', 'text': content.input_transcription.text
+                            }, to=sid, namespace='/widget')
+                        if content.output_transcription and content.output_transcription.text:
+                            await sio.emit('voice_transcript', {
+                                'role': 'assistant', 'text': content.output_transcription.text
+                            }, to=sid, namespace='/widget')
+                        if content.model_turn:
+                            for part in content.model_turn.parts or []:
+                                if part.inline_data and part.inline_data.data:
+                                    await sio.emit('voice_audio', part.inline_data.data,
+                                                   to=sid, namespace='/widget')
+
+            await asyncio.gather(browser_to_gemini(), gemini_to_browser())
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception('Widget Socket.IO voice call failed for %s: %s', sid, exc)
+        await sio.emit('voice_error', {'message': str(exc) or 'Voice call ended unexpectedly'},
+                       to=sid, namespace='/widget')
+    finally:
+        if db:
+            db.close()
+        current = _voice_calls.get(sid)
+        if current and current.get('task') is asyncio.current_task():
+            _voice_calls.pop(sid, None)
+        await sio.emit('voice_ended', to=sid, namespace='/widget')
+
+
+@sio.on('voice_start', namespace='/widget')
+async def voice_start(sid):
+    previous = _voice_calls.pop(sid, None)
+    if previous:
+        previous['task'].cancel()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+    task = asyncio.create_task(_run_voice_call(sid, queue))
+    _voice_calls[sid] = {'queue': queue, 'task': task}
+
+
+@sio.on('voice_audio', namespace='/widget')
+async def voice_audio(sid, data):
+    call = _voice_calls.get(sid)
+    if not call or not isinstance(data, (bytes, bytearray, memoryview)):
+        return
+    try:
+        call['queue'].put_nowait(bytes(data))
+    except asyncio.QueueFull:
+        # Realtime audio must stay realtime; dropping an old frame is better
+        # than growing memory and replying several seconds late.
+        try:
+            call['queue'].get_nowait()
+            call['queue'].put_nowait(bytes(data))
+        except (asyncio.QueueEmpty, asyncio.QueueFull):
+            pass
+
+
+@sio.on('voice_end', namespace='/widget')
+async def voice_end(sid):
+    call = _voice_calls.pop(sid, None)
+    if not call:
+        return
+    call['task'].cancel()
+
+
+@sio.on('disconnect', namespace='/widget')
+async def widget_disconnect(sid):
+    call = _voice_calls.pop(sid, None)
+    if call:
+        call['task'].cancel()
+
 
 def format_datetime(dt):
     """Convert datetime to ISO format string"""
