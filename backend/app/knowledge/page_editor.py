@@ -34,6 +34,7 @@ from agno.document import Document
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.logger import get_logger
 from app.knowledge.knowledge_base import KnowledgeManager
 from app.models.knowledge import Knowledge, SourceType
@@ -52,6 +53,56 @@ logger = get_logger(__name__)
 # frontend ``basePageId`` mirrors it — so page membership is identical
 # everywhere edit/delete/list operate.
 PAGE_ID_EXPR = "CASE WHEN id ~ '_[0-9]+$' THEN substring(id from '^(.*)_[0-9]+$') ELSE id END"
+
+
+def split_text_for_embedding(
+    content: str,
+    chunk_size: int = settings.KB_CHUNK_SIZE,
+    overlap: int = settings.KB_CHUNK_OVERLAP,
+) -> List[str]:
+    """Split pasted text into embedder-safe chunks without losing boundaries.
+
+    FastEmbed's model accepts 512 tokens. Pasted knowledge used to be embedded
+    as one document, so a long source either failed outright or was silently
+    truncated. The website reader already uses these same configured character
+    limits; text sources must follow the same rule.
+    """
+    text_content = content.strip()
+    if not text_content:
+        return []
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+
+    overlap = max(0, min(overlap, chunk_size - 1))
+    chunks: List[str] = []
+    start = 0
+    content_length = len(text_content)
+
+    while start < content_length:
+        hard_end = min(start + chunk_size, content_length)
+        end = hard_end
+
+        # Prefer a paragraph, then line, then word boundary. Do not choose a
+        # very early boundary because that would create tiny, noisy chunks.
+        if hard_end < content_length:
+            search_start = start + chunk_size // 2
+            for separator in ("\n\n", "\n", " "):
+                candidate = text_content.rfind(separator, search_start, hard_end)
+                if candidate > start:
+                    end = candidate + (len(separator) if separator != " " else 0)
+                    break
+
+        chunk = text_content[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= content_length:
+            break
+
+        # Keep enough neighbouring context for sentences spanning a boundary,
+        # while always moving forward even with unusual whitespace/content.
+        start = max(start + 1, end - overlap)
+
+    return chunks
 
 
 def get_manager(organization_id) -> KnowledgeManager:
@@ -238,9 +289,27 @@ def create_text_source(
     agent_ids = [str(agent_id)] if agent_id else []
 
     # Embed first — an embedding failure then creates no source row at all.
-    doc = embed_document(
-        manager, title, title, content, {"agent_id": agent_ids, "url": title, "title": title}
-    )
+    # Each vector row stays below the local embedder's context limit. The
+    # canonical id plus numeric suffixes keep all chunks grouped as one page.
+    chunks = split_text_for_embedding(content)
+    docs = []
+    for index, chunk in enumerate(chunks):
+        doc_id = title if index == 0 else f"{title}_{index}"
+        docs.append(
+            embed_document(
+                manager,
+                title,
+                doc_id,
+                chunk,
+                {
+                    "agent_id": agent_ids,
+                    "url": title,
+                    "title": title,
+                    "chunk_index": index,
+                    "chunk_count": len(chunks),
+                },
+            )
+        )
 
     repo = KnowledgeRepository(db)
     # KnowledgeRepository.create dedupes on (org, source); track whether the row
@@ -263,7 +332,7 @@ def create_text_source(
         # upsert (not insert) is idempotent on the id, so a raced duplicate title
         # overwrites its own chunk instead of raising a duplicate-key error.
         manager.vector_db.upsert(
-            [doc],
+            docs,
             filters={"name": title, "agent_id": agent_ids, "org_id": str(organization_id)},
         )
     except Exception:
