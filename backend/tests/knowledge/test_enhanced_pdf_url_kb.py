@@ -29,6 +29,11 @@ TEST_DOCUMENTS = [
     Document(content="Test PDF content 1", meta_data={"url": "https://example.com/document1.pdf", "page": 1}),
     Document(content="Test PDF content 2", meta_data={"url": "https://example.com/document1.pdf", "page": 2})
 ]
+# Most tests in this module exercise database/upsert behaviour rather than the
+# embedder contract.  Give those shared documents valid precomputed vectors;
+# dedicated embedding tests below intentionally create documents with None.
+for _document in TEST_DOCUMENTS:
+    _document.embedding = [0.1, 0.2, 0.3]
 
 TEST_FILTERS = {"agent_id": "123", "organization_id": "org-456"}
 
@@ -204,6 +209,8 @@ class TestEnhancedPDFUrlKnowledgeBase:
         doc_list_2 = [
             Document(content="PDF 2 Page 1", meta_data={"url": "https://example.com/doc2.pdf", "page": 1})
         ]
+        for document in [*doc_list_1, *doc_list_2]:
+            document.embedding = [0.1, 0.2, 0.3]
 
         with patch.object(type(kb), 'document_lists', new_callable=PropertyMock) as mock_doc_lists:
             mock_doc_lists.return_value = iter([doc_list_1, doc_list_2])
